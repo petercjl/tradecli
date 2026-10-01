@@ -46,7 +46,7 @@ Windows 执行端、独立虚拟环境和私有操作记录保存在用户 LOCAL
 
 ## 模拟买卖
 
-开发版 `0.2.0-dev.1` 提供以下流程，尚未发布到 npm：
+开发版 `0.2.0-dev.2` 提供以下流程，尚未发布到 npm：
 
 ```sh
 tradecli orders prepare --side buy --account <id> --code <六位代码> --price <价格> --quantity <股数>
@@ -64,6 +64,24 @@ tradecli orders ledger --account <id>
 `orders inspect/open/clear/quantity-mode` 分别检查、打开表单、显式清空、切换为股数输入。
 清空使用 `--yes`，只用于用户授权清理的草稿。
 实盘账户可查询；提交命令只接受明确标识为模拟炒股的账户。没有撤单、密码输入功能。
+
+## 模拟批量任务
+
+把 1–10 笔不同证券的委托写入私有 JSON 文件，格式为
+`{"orders":[{"side":"buy","code":"600001","price":"1.23","quantity":"100"}]}`。
+数量和价格使用字符串；逐笔限价。先验证，再为当前模拟账户准备批次：
+
+```sh
+tradecli batches validate --input <orders.json>
+tradecli batches prepare --input <orders.json> --account <模拟账户ID>
+tradecli batches run-simulated --batch <返回的batch_id> --account <模拟账户ID> --digest <返回的digest>
+tradecli batches status --batch <batch_id>
+```
+
+`run-simulated` 在一次 Windows 执行进程内逐笔填单、核对确认框、提交、等待合同编号并清理表单。
+每笔点击前记录状态；回执不明立即停批，后续订单保持未执行，整批不可自动重试。
+成功回执只证明委托受理，不证明成交。执行后用 `orders ledger --account <id>` 核对当日委托。
+详见 [批量执行契约](docs/batch-execution.md)。
 
 ## 范围与维护
 

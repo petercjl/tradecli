@@ -37,6 +37,16 @@
       }
     },
     {
+      "capability_id": "trade.simulated-batch",
+      "status": "implemented",
+      "features": ["single-worker", "receipt-polling", "stop-on-uncertainty"],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "Validate and prepare an authorized plan, then execute batches run-simulated with the returned batch ID and digest. Inspect status and ledger after execution."
+      }
+    },
+    {
       "capability_id": "trade.visual-review",
       "status": "implemented",
       "features": [

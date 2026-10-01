@@ -1,6 +1,6 @@
 ---
 name: tradecli
-description: Use tradecli to switch logged-in THS accounts, review holdings images, and prepare and test buy/sell orders in simulated accounts from Codex.
+description: Use tradecli to switch THS accounts, review holdings images, and run account-bound individual or batch orders in simulated accounts from Codex.
 ---
 
 # tradecli
@@ -39,7 +39,7 @@ freshness or a completed query from an incomplete operation.
    GUI operations serialize within the Windows desktop. Each query restores its
    initial account on completion. `accounts select --account <id>` intentionally
    keeps the selected account. A visible populated order form blocks navigation.
-   For orders, use the order branch below.
+   For orders, use the individual or batch order branch below.
 5. **Handle outcome.** Inspect `ok`, `status`, `error`, `results`, `restoration`
    and each result's `warnings`. For holdings images, complete the visual branch below before reporting rows.
    For a waiting legacy copy operation, read only the recovery
@@ -145,3 +145,25 @@ Return to step 5; use the interpretation knowledge route for disagreement.
 `FORM_DRAFT_PRESENT` or unknown dialogs stop submission. Inspect the named state;
 preserve user-owned drafts and do not dismiss unknown dialogs. CAPTCHA is completed
 by the user. `ORDER_ALREADY_ATTEMPTED` returns to result/ledger inspection only.
+
+## Simulated batch branch → step 6
+
+1. Resolve the intended simulated account from `accounts list`. Accept an authorized
+   plan of 1–10 distinct securities with side, six-digit code, limit price and shares.
+   Store the plan in a private JSON file as `{"orders":[{"side":"buy","code":"600001","price":"1.23","quantity":"100"}]}`.
+2. Run `batches validate --input <file>`, then `batches prepare --input <file>
+   --account <id>`. Compare the returned orders, estimated buy total, available
+   funds and account with the authorized plan. Preparation expires in five minutes.
+3. Execute once using `batches run-simulated --batch <batch_id> --account <id>
+   --digest <digest>`. One Windows worker runs the batch serially. Each order is
+   saved before submit and confirmation, matched to its confirmation dialog,
+   then polled for an explicit success receipt with contract number. A recognized
+   receipt is acknowledged before the next order.
+4. Inspect `batches status --batch <batch_id>` and `orders ledger --account <id>`.
+   Match accepted contract numbers to the visible ledger and distinguish accepted
+   from filled. If a row is `unknown` or the batch `needs_attention`, report the
+   last confirmed contract and unattempted rows. Do not rerun or replace uncertain
+   orders. Return to step 6 of the main line.
+
+Batch commands submit only in a currently selected simulated account. A real
+account, changed form, verification dialog or unexpected response stops execution.

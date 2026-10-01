@@ -45,10 +45,10 @@ export function deploy(c) {
  powershell(c,script);
  return hash;
 }
-export function invoke(c, request) {
+export function invoke(c, request, timeout=120000) {
  const hash=deploy(c);
  const encoded=Buffer.from(JSON.stringify({...request,exe:c.exe,protocol:1})).toString('base64');
- const out=powershell(c,`$python=Join-Path $env:LOCALAPPDATA 'tradecli/venv/Scripts/python.exe'; $worker=Join-Path $env:LOCALAPPDATA 'tradecli/workers/${hash}.py'; & $python $worker '${encoded}'; if($LASTEXITCODE -ne 0){throw 'WORKER_EXIT_FAILED'}`,120000);
+ const out=powershell(c,`$python=Join-Path $env:LOCALAPPDATA 'tradecli/venv/Scripts/python.exe'; $worker=Join-Path $env:LOCALAPPDATA 'tradecli/workers/${hash}.py'; & $python $worker '${encoded}'; if($LASTEXITCODE -ne 0){throw 'WORKER_EXIT_FAILED'}`,timeout);
  try { const result=JSON.parse(out); if(result.protocol!==1 || typeof result.ok!=='boolean') throw 0; return result; }
  catch {throw new Fault('WORKER_PROTOCOL_INVALID');}
 }

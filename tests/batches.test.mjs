@@ -1,0 +1,27 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { validateBatchFile } from '../src/batches.mjs';
+
+test('batch input is exact, ordered and rejects ambiguous orders',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tradecli-batch-'));
+ const file=path.join(dir,'orders.json');
+ const good={orders:[{side:'buy',code:'600001',price:'1.23',quantity:'100'},
+                     {side:'sell',code:'600002',price:'2.10',quantity:'200'}]};
+ try {
+  fs.writeFileSync(file,JSON.stringify(good));
+  assert.deepEqual(validateBatchFile(file).orders,good.orders);
+  for(const bad of [
+   {...good,account:'unexpected'},
+   {orders:[good.orders[0],good.orders[0]]},
+   {orders:[{...good.orders[0],quantity:100}]},
+   {orders:[{...good.orders[0],price:'NaN'}]},
+   {orders:Array.from({length:11},(_,i)=>({...good.orders[0],code:String(600000+i)}))}
+  ]) {
+   fs.writeFileSync(file,JSON.stringify(bad));
+   assert.throws(()=>validateBatchFile(file));
+  }
+ } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});

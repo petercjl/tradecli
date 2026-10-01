@@ -68,6 +68,20 @@
       ]
     },
     {
+      "id": "trade.simulated-batch",
+      "purpose": "Execute an authorized simulated order plan in one Windows worker",
+      "required": true,
+      "required_features": ["single-worker", "receipt-polling", "stop-on-uncertainty"],
+      "input_fields": ["account", "orders", "batch_id", "digest"],
+      "output_fields": ["batch_id", "status", "orders", "error"],
+      "side_effects": {
+        "external_mutation": true,
+        "may_cost_money": false,
+        "authorization": "Explicit user authorization for simulated orders only"
+      },
+      "errors": ["SIMULATED_ACCOUNT_REQUIRED", "BATCH_ALREADY_ATTEMPTED", "ORDER_RECEIPT_UNCONFIRMED"]
+    },
+    {
       "id": "trade.visual-review",
       "purpose": "Inspect holdings screenshots and create a bound review",
       "required": true,

@@ -73,8 +73,10 @@ class Orders(unittest.TestCase):
             read_edit(SimpleNamespace(texts=lambda:['100','200']))
     def test_confirmation_attempt_survives_failure_and_cannot_repeat(self):
         self.draft['status']='submission_attempted';self.store.save(self.draft)
-        def fail(*args,**kwargs):raise RuntimeError('UI_TIMEOUT')
-        self.client.confirmation_window=lambda order:SimpleNamespace(set_focus=lambda:None,type_keys=fail)
+        def fail(order,before_send):
+            before_send()
+            raise RuntimeError('UI_TIMEOUT')
+        self.client.confirm_order=fail
         request=dict(action='orders.confirm-simulated',exe='test',draft='draft',account=self.order['account'])
         factory=lambda *a,**k:self.client
         with self.assertRaisesRegex(RuntimeError,'UI_TIMEOUT'):dispatch(request,self.store,factory)
@@ -90,6 +92,17 @@ class Orders(unittest.TestCase):
         self.draft['requested_at']+=600;self.store.save(self.draft)
         with self.assertRaisesRegex(RuntimeError,'EXPIRED'):self.submit()
         self.assertEqual(self.client.clicks,0)
+    def test_confirmation_waits_for_contract_after_dialog_disappears(self):
+        events=[]
+        modal=SimpleNamespace(handle=7,type_keys=lambda key,**kw:events.append(('key',key)))
+        self.client.confirmation_window=lambda order:modal
+        responses=iter([{'status':'submission_unconfirmed','dialogs':[]},
+                        {'status':'dialog_review_required','dialogs':[{'text':'您的买入委托已成功提交，合同编号：12345'}]}])
+        self.client.order_response=lambda:next(responses)
+        response=ReadOnlyTHS.confirm_order(self.client,self.order,lambda:events.append(('persist',None)))
+        self.assertEqual(events,[('persist',None),('key','%Y')])
+        self.assertEqual(response['status'],'submission_accepted')
+        self.assertEqual(len(response['timeline']),3)
     def test_invalid_inputs_fail(self):
         for field,bad in [('code','1'),('price','NaN'),('price','0'),('quantity','0'),('quantity','1.5'),('side','cancel')]:
             with self.subTest(field=field,bad=bad):

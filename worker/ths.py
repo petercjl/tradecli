@@ -266,10 +266,38 @@ class ReadOnlyTHS:
                 buttons=[c for c in window.descendants() if c.class_name()=="Button"
                          and c.control_id()==6 and c.is_visible() and c.window_text().startswith("是")]
                 if len(buttons)==1:
-                    candidates.append(buttons[0])
+                    candidates.append(window)
         if len(candidates)!=1:
             raise RuntimeError("ORDER_CONFIRMATION_MISMATCH")
         return candidates[0]
+
+    def confirm_order(self, order, before_send):
+        modal = self.confirmation_window(order)
+        self.assert_simulated(order["account"])
+        trace = [{"event":"confirmation_matched", "handle":modal.handle,
+                  "at":time.time()}]
+        before_send()
+        # easytrader sends Alt+Y to the foreground dialog, not its button.
+        modal.type_keys("%Y", set_foreground=True)
+        deadline = time.monotonic() + 6.0
+        last = None
+        while True:
+            response = self.order_response()
+            signature = (response.get("status"), tuple(d.get("text", "") for d in response.get("dialogs", [])))
+            if signature != last:
+                trace.append({"event":"dialog_state", "status":response["status"],
+                              "titles":[d.get("text", "").split("\n")[0][:160] for d in response.get("dialogs", [])],
+                              "at":time.time()})
+                last = signature
+            if receipt_contract(response, order["side"]):
+                return dict(response, status="submission_accepted", timeline=trace)
+            if response["status"] == "verification_required":
+                return dict(response, timeline=trace)
+            if response.get("dialogs") and not any("您是否确定以上" in d.get("text", "") for d in response["dialogs"]):
+                return dict(response, timeline=trace)
+            if time.monotonic() >= deadline:
+                return dict(response, status="submission_unconfirmed", timeline=trace)
+            time.sleep(0.2)
 
     def resume(self, checkpoint):
         # Resume only the recorded request. Never select the grid or send keys.
@@ -467,6 +495,38 @@ def validate_confirmation(text, order, account_label):
         return False
 
 
+def receipt_contract(response, side):
+    dialogs = response.get("dialogs") or []
+    if len(dialogs) != 1:
+        return None
+    action = "买入" if side == "buy" else "卖出"
+    matches = re.findall(r"您的"+action+r"委托已成功提交，合同编号：([0-9]+)", dialogs[0].get("text", ""))
+    return matches[0] if len(matches) == 1 else None
+
+
+def validate_batch_orders(orders, account):
+    if not isinstance(orders, list) or not 1 <= len(orders) <= 10:
+        raise RuntimeError("BATCH_SIZE_INVALID")
+    if not isinstance(account, str) or not re.fullmatch(r"a_[a-f0-9]{16}", account):
+        raise RuntimeError("ACCOUNT_REQUIRED")
+    result = []
+    seen = set()
+    for row in orders:
+        if not isinstance(row, dict) or set(row) != {"side", "code", "price", "quantity"}:
+            raise RuntimeError("BATCH_ORDER_SCHEMA_INVALID")
+        order = validate_order(dict(row, account=account))
+        if order["code"] in seen:
+            raise RuntimeError("BATCH_DUPLICATE_SECURITY")
+        seen.add(order["code"])
+        result.append(order)
+    return result
+
+
+def batch_digest(account, orders):
+    return hashlib.sha256(json.dumps({"account":account,"orders":orders},
+                       ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def order_fields_match(actual, order):
     try:
         return (actual.get("unit") == "shares" and actual["side"] == order["side"] and actual["code"] == order["code"]
@@ -511,10 +571,124 @@ class Store:
         if not row: raise RuntimeError("OPERATION_NOT_FOUND")
         return json.loads(row[0])
 
+    def find_batch_digest(self, digest):
+        for row in self.db.execute("SELECT data FROM operations"):
+            item = json.loads(row[0])
+            if item.get("kind") == "batch" and item.get("digest") == digest:
+                return item
+        return None
+
     def pending(self):
         return [json.loads(row[0]) for row in self.db.execute("SELECT data FROM operations")
                 if json.loads(row[0])["status"] in ("running", "waiting")
                 or (json.loads(row[0])["status"] == "failed" and json.loads(row[0]).get("checkpoint"))]
+
+
+def batch_result(batch):
+    return {"ok":batch["status"] in ("prepared", "completed"),
+            "batch_id":batch["id"], "digest":batch["digest"],
+            "account":batch["account"], "status":batch["status"],
+            "error":batch.get("error"), "orders":batch["orders"],
+            "estimated_buy_total":batch["estimated_buy_total"],
+            "available_before":batch["available_before"],
+            "started_at":batch.get("started_at"), "updated_at":batch["updated_at"]}
+
+
+def acknowledge_batch_receipt(client, order, response):
+    contract = receipt_contract(response, order["side"])
+    if not contract:
+        raise RuntimeError("ORDER_RECEIPT_REQUIRED")
+    current = client.order_response()
+    if current.get("dialogs") != response.get("dialogs"):
+        raise RuntimeError("ORDER_RECEIPT_CHANGED")
+    matches=[]
+    for window in client.app.windows(visible_only=True):
+        if window.handle == client.window.handle:
+            continue
+        text="\n".join(c.window_text() for c in window.descendants() if c.class_name()=="Static")
+        if not re.search(r"合同编号："+re.escape(contract)+r"(?![0-9])",text):
+            continue
+        matches.extend(c for c in window.descendants() if c.class_name()=="Button"
+                       and c.control_id()==2 and c.is_visible() and c.window_text()=="确定")
+    if len(matches)!=1:
+        raise RuntimeError("ORDER_RECEIPT_MISMATCH")
+    client.assert_simulated(order["account"])
+    matches[0].click()
+
+
+def clear_batch_form(client, order):
+    client.assert_simulated(order["account"])
+    fields=client.order_fields(order["side"])
+    if not any(fields[key] for key in ("code","price","quantity")):
+        return
+    if not order_fields_match(fields, order):
+        raise RuntimeError("ORDER_READBACK_MISMATCH")
+    for cid in (1034,1033,1032):
+        client.control("Edit",cid).type_keys("^a{BACKSPACE}",set_foreground=True)
+    fields=client.order_fields(order["side"])
+    if fields["code"] or fields["quantity"]:
+        raise RuntimeError("ORDER_CLEAR_FAILED")
+
+
+def execute_batch(client, store, batch):
+    batch["status"]="running"
+    batch["started_at"]=time.time()
+    store.save(batch)
+    for entry in batch["orders"]:
+        order=entry["order"]
+        try:
+            client.assert_simulated(batch["account"])
+            if entry["status"] != "queued":
+                raise RuntimeError("BATCH_ORDER_ALREADY_ATTEMPTED")
+            prepared=client.prepare_order(order)
+            entry["status"]="prepared"
+            entry["preview"]={k:prepared[k] for k in ("side","unit","code","price","quantity","captured_at")}
+            store.save(batch)
+            if not order_fields_match(client.order_fields(order["side"]),order):
+                raise RuntimeError("ORDER_READBACK_MISMATCH")
+            client.assert_simulated(batch["account"])
+            entry["status"]="submit_attempted"
+            store.save(batch)
+            client.control("Button",1006).click()
+            deadline=time.monotonic()+5
+            while True:
+                response=client.order_response()
+                if response.get("dialogs") or response["status"] == "verification_required" or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.2)
+            entry["submission_response"]=response
+            store.save(batch)
+            if response["status"] != "dialog_review_required":
+                raise RuntimeError("ORDER_CONFIRMATION_NOT_FOUND")
+            # Validate the precise dialog before recording a confirmation attempt.
+            client.confirmation_window(order)
+            def persist_attempt():
+                entry["status"]="confirm_attempted"
+                store.save(batch)
+            response=client.confirm_order(order,persist_attempt)
+            entry["confirmation_response"]=response
+            store.save(batch)
+            contract=receipt_contract(response,order["side"])
+            if not contract:
+                raise RuntimeError("ORDER_RECEIPT_UNCONFIRMED")
+            entry["contract_no"]=contract
+            entry["status"]="accepted"
+            store.save(batch)
+            acknowledge_batch_receipt(client,order,response)
+            clear_batch_form(client,order)
+            entry["form_cleared"]=True
+            store.save(batch)
+        except Exception as exc:
+            previous=entry["status"]
+            entry["status"]="unknown" if previous in ("submit_attempted","confirm_attempted") else previous
+            entry["error"]=safe_error(exc)
+            batch["status"]="needs_attention"
+            batch["error"]=safe_error(exc)
+            store.save(batch)
+            return batch_result(batch)
+    batch["status"]="completed"
+    store.save(batch)
+    return batch_result(batch)
 
 
 def safe_error(exc):
@@ -577,6 +751,16 @@ def execute_operation(client, store, op, resume=False):
 
 def dispatch(request, store, factory=ReadOnlyTHS):
     action = request["action"]
+    if action == "batches.status":
+        batch=store.get(request.get("batch", ""))
+        if batch.get("kind")!="batch" or batch["exe"]!=request["exe"]:
+            raise RuntimeError("BATCH_INVALID")
+        if batch["status"] == "running":
+            # The desktop mutex is held throughout an active run; reaching this
+            # branch means its process has exited without a terminal checkpoint.
+            batch.update(status="needs_attention",error="BATCH_INTERRUPTED")
+            store.save(batch)
+        return batch_result(batch)
     if action.startswith("operations."):
         op = store.get(request.get("id", ""))
         if op["exe"] != request["exe"]: raise RuntimeError("OPERATION_CONNECTION_MISMATCH")
@@ -594,7 +778,7 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         except Exception as exc:
             return {**result_for(op),"ok":False,"error":safe_error(exc)}
         return execute_operation(client,store,op,True)
-    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "funds", "positions", "snapshot", "doctor"):
+    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.run-simulated", "funds", "positions", "snapshot", "doctor"):
         raise RuntimeError("COMMAND_UNSUPPORTED")
     pending=store.pending()
     if pending:
@@ -604,8 +788,42 @@ def dispatch(request, store, factory=ReadOnlyTHS):
     else:
         client = factory(request["exe"])
     if action == "doctor":
-        return {"ok":True,"attached":True,"account_count":len(client.accounts()["accounts"]),"interactive_session":os.environ.get("SESSIONNAME","unknown"),"read_only":True}
+        return {"ok":True,"attached":True,"account_count":len(client.accounts()["accounts"]),
+                "interactive_session":os.environ.get("SESSIONNAME","unknown"),
+                "simulated_orders_only":True}
     if action == "accounts": return {"ok":True,**public_accounts(client.accounts())}
+    if action == "batches.prepare":
+        account=request.get("account")
+        orders=validate_batch_orders(request.get("orders"),account)
+        if account_id(client.accounts()["current_account"])!=account:
+            raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+        client.assert_simulated(account)
+        client.open_page("holdings")
+        funds=client.funds()["funds"]
+        total=sum((Decimal(o["price"])*int(o["quantity"]) for o in orders if o["side"]=="buy"),Decimal("0"))
+        reserve=Decimal(5)*sum(o["side"]=="buy" for o in orders)
+        if total+reserve>Decimal(funds["可用金额"]):
+            raise RuntimeError("BATCH_FUNDS_INSUFFICIENT")
+        digest=batch_digest(account,orders)
+        if store.find_batch_digest(digest):
+            raise RuntimeError("BATCH_DUPLICATE_PLAN")
+        batch={"id":str(uuid.uuid4()),"kind":"batch","exe":request["exe"],"account":account,
+               "digest":digest,"status":"prepared","requested_at":time.time(),
+               "estimated_buy_total":str(total),"available_before":funds["可用金额"],
+               "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
+        store.save(batch)
+        return batch_result(batch)
+    if action == "batches.run-simulated":
+        batch=store.get(request.get("batch", ""))
+        if batch.get("kind")!="batch" or batch["exe"]!=request["exe"]:
+            raise RuntimeError("BATCH_INVALID")
+        if batch["status"]!="prepared":
+            raise RuntimeError("BATCH_ALREADY_ATTEMPTED")
+        if (request.get("account")!=batch["account"] or request.get("digest")!=batch["digest"]
+                or not 0<=time.time()-batch["requested_at"]<=300):
+            raise RuntimeError("BATCH_EXPIRED_OR_MISMATCH")
+        client.assert_simulated(batch["account"])
+        return execute_batch(client,store,batch)
     if action.startswith("orders."):
         if action in ("orders.submit-simulated", "orders.confirm-simulated", "orders.result", "orders.acknowledge"):
             draft = store.get(request.get("draft", ""))
@@ -617,7 +835,7 @@ def dispatch(request, store, factory=ReadOnlyTHS):
                     raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
                 saved = draft.get("response", {})
                 current = client.order_response()
-                if draft["status"] != "confirmation_attempted" or current != saved:
+                if draft["status"] != "confirmation_attempted" or current.get("dialogs") != saved.get("dialogs"):
                     raise RuntimeError("ORDER_RECEIPT_MISMATCH")
                 side = "买入" if draft["order"]["side"] == "buy" else "卖出"
                 receipts = [d for d in current.get("dialogs", []) if re.search(
@@ -651,14 +869,10 @@ def dispatch(request, store, factory=ReadOnlyTHS):
                     raise RuntimeError("ORDER_ALREADY_ATTEMPTED")
                 if request.get("account") != draft["order"]["account"] or not 0 <= time.time()-draft["requested_at"] <= 300:
                     raise RuntimeError("ORDER_CONFIRMATION_EXPIRED_OR_MISMATCH")
-                button=client.confirmation_window(draft["order"])
-                client.assert_simulated(draft["order"]["account"])
-                draft["status"]="confirmation_attempted"
-                store.save(draft)
-                button.set_focus()
-                button.type_keys("%Y", set_foreground=True)
-                time.sleep(0.8)
-                response=client.order_response()
+                def persist_attempt():
+                    draft["status"]="confirmation_attempted"
+                    store.save(draft)
+                response=client.confirm_order(draft["order"],persist_attempt)
                 draft["response"]=response
                 store.save(draft)
                 return {"ok":True,"draft_id":draft["id"],"simulation_only":True,"confirmation_attempted":True,**response}

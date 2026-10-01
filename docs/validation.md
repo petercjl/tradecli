@@ -4,7 +4,7 @@
 
 Codex-only first release. Node CLI, Python Windows worker, protocol 1.
 macOS + Parallels is the primary runtime. Native Windows transport is implemented
-but not live-tested. The released 0.1.0 supports queries; the 0.2.0-dev.1 source adds visual holdings and simulated orders.
+but not live-tested. The released 0.1.0 supports queries; the 0.2.0-dev.2 source adds visual holdings, simulated orders and single-worker simulated batches.
 
 ## Development evidence
 
@@ -78,3 +78,21 @@ and Codex adapter-gap checks passed. Visual holdings review reconciled all visib
 rows after simulated orders; clipboard sequence was unchanged. Ordinary order
 execution loads the Skill and Codex adapter only; recovery/interpretation routes
 and maintenance provenance remain deferred until their respective nodes.
+
+## Batch development (2026-10-01)
+
+Unreleased 0.2.0-dev.2 extends the same Codex and Parallels environment.
+The worker now sends Alt+Y to the validated confirmation modal and polls briefly
+for a success receipt. A first single-order smoke test received a contract but
+stopped during cleanup because the client had already cleared the form; the
+accepted contract was independently visible in the current-day ledger. The
+cleanup guard was updated to accept a fully blank form. A subsequent two-order
+batch finished in one worker in about 15 seconds. Both contract numbers matched
+the ledger, with 100 shares each and zero filled at inspection.
+
+The batch tests cover a single worker, exact receipt matching, an absent receipt
+stopping later rows, a real-account guard, digest and duplicate-plan guards,
+interrupted state, and automatic client form clearing. The prior no-receipt
+case was not repeated; its underlying cause is still unknown. The new polling
+path recovered receipts in this small sample and preserves uncertain outcomes
+without retry.

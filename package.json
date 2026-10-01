@@ -1,6 +1,6 @@
 {
   "name": "@petercjl/tradecli",
-  "version": "0.2.0-dev.1",
+  "version": "0.2.0-dev.2",
   "description": "Codex THS account queries, visual holdings review and simulated-order CLI",
   "type": "module",
   "bin": {

@@ -32,13 +32,18 @@
     "orders confirm-simulated",
     "orders acknowledge",
     "orders result",
-    "orders ledger"
+    "orders ledger",
+    "batches validate",
+    "batches prepare",
+    "batches run-simulated",
+    "batches status"
   ],
   "sideEffects": [
     "Private configuration, operation records and screenshots",
     "Account selection; explicit selections remain active, queries restore the original account",
     "Buy/sell form edits",
     "Explicit simulated-account order submission",
+    "Explicit simulated-account batch submission (one Windows worker, up to ten distinct securities)",
     "Legacy copy recovery only",
     "Explicit runtime and Skill installation"
   ],

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { root, pkg, run, Fault, config, createConfig, output, parse } from './common.mjs';
 import { discover, runtime, invoke } from './transport.mjs';
 import { saveCaptures, reviewCapture } from './visual.mjs';
+import { validateBatchFile } from './batches.mjs';
 export const help = `tradecli — Codex THS query and simulated-order CLI
   version | capabilities | schema | doctor
   connections discover
@@ -21,6 +22,10 @@ export const help = `tradecli — Codex THS query and simulated-order CLI
   orders acknowledge --draft <id> --account <id>
   orders result --draft <id>
   orders ledger --account <id>
+  batches validate --input <orders.json>
+  batches prepare --input <orders.json> --account <id>
+  batches run-simulated --batch <id> --account <id> --digest <sha256>
+  batches status --batch <id>
   funds get [--account <id>]
   positions list [--account <id>]
   positions review --capture <id> --input <review.json>
@@ -59,6 +64,8 @@ const options={
  'orders submit-simulated':['draft','account'], 'orders result':['draft'],
  'orders confirm-simulated':['draft','account'], 'orders acknowledge':['draft','account'],
  'orders ledger':['account'],
+ 'batches validate':['input'], 'batches prepare':['input','account'],
+ 'batches run-simulated':['batch','account','digest'], 'batches status':['batch'],
  'funds get':['account'], 'positions list':['account'], 'snapshots create':['accounts'],
  'operations status':[], 'operations resume':[], 'operations abandon':['yes'],
  'skill source':['agent'], 'skill status':['agent'], 'skill install':['agent'], 'skill update':['agent'],
@@ -75,7 +82,7 @@ export function execute(argv) {
  for(const keyFlag of Object.keys(flags)) if(!['json',...options[key]].includes(keyFlag))throw new Fault('OPTION_UNSUPPORTED',{option:keyFlag});
  if(key==='version')return {ok:true,name:pkg.name,version:pkg.version};
  if(key==='capabilities')return {ok:true,...JSON.parse(fs.readFileSync(path.join(root,'capabilities.json'),'utf8'))};
- if(key==='schema')return {ok:true,protocol:1,result:{required:['ok','schemaVersion','version'],optional:['operation_id','status','error','results','restoration']},error:{exitCode:2,code:'error.code (CLI) or error (worker)',details:'non-secret diagnostics'},amounts:'decimal strings',securityCodes:'six-digit strings',freshness:'client display only',commands:options};
+ if(key==='schema')return {ok:true,protocol:1,result:{required:['ok','schemaVersion','version'],optional:['operation_id','batch_id','digest','orders','status','error','results','restoration']},error:{exitCode:2,code:'error.code (CLI) or error (worker)',details:'non-secret diagnostics'},amounts:'decimal strings',securityCodes:'six-digit strings',freshness:'client display only',commands:options};
  if(key==='connections discover')return {ok:true,...discover()};
  if(key==='config init') {
   const transport=flags.transport || (process.platform==='darwin'?'parallels':'windows');
@@ -87,6 +94,11 @@ export function execute(argv) {
   if(!flags.capture||!flags.input)throw new Fault('REVIEW_ARGUMENTS_REQUIRED');
   return reviewCapture(flags.capture,flags.input);
  }
+ if(key==='batches validate') {
+  if(!flags.input)throw new Fault('BATCH_INPUT_REQUIRED');
+  const plan=validateBatchFile(flags.input);
+  return {ok:true,status:'validated',orders:plan.orders,count:plan.orders.length};
+ }
  if(args[0]==='update') {
   const latest=JSON.parse(run('npm',['view',pkg.name,'version','--json']));
   if(!/^\d+\.\d+\.\d+$/.test(latest))throw new Fault('REGISTRY_VERSION_INVALID');
@@ -96,6 +108,20 @@ export function execute(argv) {
   return {ok:true,installed:latest,verify:'tradecli version'};
  }
  const c=config();
+ if(args[0]==='batches') {
+  if(args[1]==='status') {
+   if(!/^[a-f0-9-]{36}$/.test(flags.batch||''))throw new Fault('BATCH_ID_REQUIRED');
+   return invoke(c,{action:'batches.status',batch:flags.batch});
+  }
+  if(!/^a_[a-f0-9]{16}$/.test(flags.account||''))throw new Fault('ACCOUNT_REQUIRED');
+  if(args[1]==='prepare') {
+   if(!flags.input)throw new Fault('BATCH_INPUT_REQUIRED');
+   const plan=validateBatchFile(flags.input);
+   return invoke(c,{action:'batches.prepare',account:flags.account,orders:plan.orders});
+  }
+  if(!/^[a-f0-9-]{36}$/.test(flags.batch||'')|| !/^[a-f0-9]{64}$/.test(flags.digest||''))throw new Fault('BATCH_RUN_ARGUMENTS_INVALID');
+  return invoke(c,{action:'batches.run-simulated',batch:flags.batch,account:flags.account,digest:flags.digest},600000);
+ }
  if(args[0]==='orders') {
   if(args[1]==='ledger') {
    if(!/^a_[a-f0-9]{16}$/.test(flags.account||''))throw new Fault('ACCOUNT_REQUIRED');
