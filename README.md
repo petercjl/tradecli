@@ -1,8 +1,8 @@
 # tradecli
 
-Codex 用的同花顺只读查询插件：一个 npm CLI、一份配套 Skill、一个 Windows 执行端。
+Codex 用的同花顺查询与模拟交易插件：一个 npm CLI、一份配套 Skill、一个 Windows 执行端。
 借鉴 [easytrader](https://github.com/shidenggui/easytrader) 的 Win32 适配方法，独立管理
-运行环境、账户查询、验证码恢复和结构化结果。
+运行环境、账户切换、持仓复核、模拟委托和结构化结果。
 
 ## 安装
 
@@ -28,33 +28,45 @@ tradecli positions list --json
 Windows 执行端、独立虚拟环境和私有操作记录保存在用户 LOCALAPPDATA 下的 tradecli 目录。
 安装不包含账号、密码、访问授权或自动登录。无需安装整个 easytrader。
 
-## 查询和恢复
+## 账户与持仓
 
-资金和持仓查询要求客户端处于资金股票页面；账户 ID 来自 `accounts list`。
-指定 `--account <id>` 查询其他账户；`snapshots create --accounts <id,id>` 依次读取。
-完成后恢复原账户。持仓读取会改变 Windows 剪贴板和表格选择。
+账户 ID 来自 `accounts list`。`accounts select --account <id>` 切换并保留当前账户；
+查询指定 `--account <id>` 或多账户 `snapshots create --accounts <id,id>` 会在结束后恢复原账户。
 
-遇到验证时返回 `operation_id`；用户手动完成后执行：
+`positions list` 返回私有截图和 `capture_id`，由 Codex 查看完整表格，再调用
+`positions review --capture <id> --input <review.json>` 校验代码、数量、图片哈希和金额对账。
+新持仓读取不复制、不导出表格，避免走复制验证码路径；它不是无人复核的自动结构化接口。
+超出窗口的行不能声明完整。截图识别和对账通过才算持仓读取完成。
+输入格式见配套 Skill。金额、股数和六位代码均使用字符串。
+
+旧版本的未完成复制可用 `operations status/resume <id>` 恢复原请求；
+验证由用户处理，恢复不重新复制。放弃需 `operations abandon <id> --yes`。
+所有命令输出 JSON；失败退出码 2。`schema` 和 `capabilities` 提供当前契约。
+数据代表客户端显示；保留对账警告和恢复失败。标签重复或切换后资金完全相同会报错。
+
+## 模拟买卖
+
+开发版 `0.2.0-dev.1` 提供以下流程，尚未发布到 npm：
 
 ```sh
-tradecli operations status <operation-id> --json
-tradecli operations resume <operation-id> --json
+tradecli orders prepare --side buy --account <id> --code <六位代码> --price <价格> --quantity <股数>
+tradecli orders submit-simulated --draft <draft-id> --account <id>
+tradecli orders confirm-simulated --draft <draft-id> --account <id>
+tradecli orders result --draft <draft-id>
+tradecli orders acknowledge --draft <draft-id> --account <id>
+tradecli orders ledger --account <id>
 ```
 
-恢复读取原请求，不重新发送复制。请求有效期五分钟，账户、进程、窗口和剪贴板
-来源必须匹配。中断记录会阻止新查询；放弃时使用
-`operations abandon <operation-id> --yes`，并人工检查当前界面和账户。
-放弃只改变操作状态，不关闭弹窗或恢复账户。
-
-所有命令输出 JSON；`ok:false` 退出码为 2。`schema` 和 `capabilities` 提供当前契约。
-金额为十进制字符串；证券代码保留前导零。多账户快照为顺序采集。
-数据代表客户端显示，不能证明与券商服务器实时同步。对账警告和恢复失败均会保留。
-标签相同的账户或切换后资金完全相同的情况会保守报错。
+`prepare` 只填单并返回截图。提交与确认独立、一次性执行，必须绑定当前模拟账户、
+买卖方向、代码、价格、股数和五分钟内的草稿。用户应先核对预览。
+`acknowledge` 仅关闭与该草稿已记录回执一致的成功提示；`ledger` 打开当日委托供核对。
+结果不明时查询回执和委托，不自动重发。委托受理不等于成交。
+`orders inspect/open/clear/quantity-mode` 分别检查、打开表单、显式清空、切换为股数输入。
+清空使用 `--yes`，只用于用户授权清理的草稿。
+实盘账户可查询；提交命令只接受明确标识为模拟炒股的账户。没有撤单、密码输入功能。
 
 ## 范围与维护
 
-0.1 系列提供账户、资金和持仓查询，无买卖、撤单、新股申购或密码输入命令。
-界面自动操作并不等于模拟资金交易。验证码由用户处理；不承诺无人值守。
 仅提供 Codex Skill；其源文件随 npm 包维护，安装位置为受管理链接。
 `skill source/status/install/update` 查看和管理 Skill；用户已有同名 Skill 会保留并报错。
 `update check` 检查更新；`update install --yes` 更新 npm 包。

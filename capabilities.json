@@ -1,7 +1,7 @@
 {
   "agent": "codex",
   "provider": "ths-desktop",
-  "permission": "read-only",
+  "permission": "queries-and-simulated-orders",
   "commands": [
     "connections discover",
     "config init",
@@ -20,13 +20,27 @@
     "skill install",
     "skill update",
     "update check",
-    "update install"
+    "update install",
+    "accounts select",
+    "positions review",
+    "orders open",
+    "orders inspect",
+    "orders clear",
+    "orders quantity-mode",
+    "orders prepare",
+    "orders submit-simulated",
+    "orders confirm-simulated",
+    "orders acknowledge",
+    "orders result",
+    "orders ledger"
   ],
   "sideEffects": [
-    "Local private configuration and operation records",
-    "Account selection and restoration",
-    "Holdings table selection and clipboard copy",
-    "Explicit runtime and skill installation"
+    "Private configuration, operation records and screenshots",
+    "Account selection; explicit selections remain active, queries restore the original account",
+    "Buy/sell form edits",
+    "Explicit simulated-account order submission",
+    "Legacy copy recovery only",
+    "Explicit runtime and Skill installation"
   ],
   "transports": {
     "parallels": "implemented",
@@ -34,8 +48,9 @@
   },
   "limitations": [
     "Client display freshness, not broker-server verification",
-    "Manual CAPTCHA; cannot promise unattended operation",
+    "Holdings require Codex image review; clipped rows cannot be accepted as complete",
     "Equal fund displays can prevent automatic account switching",
-    "No order submission, cancellation or credential handling"
+    "Order submission is limited to identified simulated accounts; no real-order submission or cancellation",
+    "Unknown submission outcome must not be retried automatically"
   ]
 }

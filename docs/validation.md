@@ -4,7 +4,7 @@
 
 Codex-only first release. Node CLI, Python Windows worker, protocol 1.
 macOS + Parallels is the primary runtime. Native Windows transport is implemented
-but not live-tested. No order execution is implemented.
+but not live-tested. The released 0.1.0 supports queries; the 0.2.0-dev.1 source adds visual holdings and simulated orders.
 
 ## Development evidence
 
@@ -47,3 +47,34 @@ returned nine rows without a new copy request and restored the original account.
 The host uses Parallels home sharing to transfer the bundled worker as a file;
 this avoids large encoded-command payload limits. Uploaded content is verified
 by SHA-256. Runtime and client operations execute in the current Windows session.
+
+## Desktop actions development (2026-10-01)
+
+Unreleased 0.2.0-dev.1, Codex + macOS Parallels + Windows 11 ARM.
+- No-copy capture and image review reconciled simulated holdings. A real account
+  was also captured without a copy request. Clipboard sequence stayed unchanged.
+- Account selection and query restoration were exercised against logged-in accounts.
+- Simulated sell and buy each returned an accepted contract; both appeared in the
+  refreshed current-day order ledger with matching code, price and 100-share amount.
+  Both were unfilled at inspection. Real-account submission was not performed.
+- Earlier buy attempts returned no receipt and no matching ledger row. Their cause
+  remains unresolved; no successful execution is inferred from those attempts.
+- Input uses easytrader's select/type approach with explicit full-range selection;
+  GetWindowText is empty in this client, so default selection and readback are
+  insufficient. EM_GETLINE provides actual values. Submission requires exact readback.
+- Navigation uses the upstream current-day-order tree path and F5 refresh.
+  Confirmation uses the upstream Alt+Y approach, after exact dialog validation.
+- Test orders remain in the simulated account. Cancellation is outside this version.
+- Large scrolling holdings tables and native Windows host transport are unverified.
+- Skill update uses portable-skill-creator with the current base skill-creator.
+  Existing hybrid interpretation/recovery references are retained; new visual and
+  simulated-order contracts derive from authorized requirements and live evidence.
+  Clean-context regression was not requested and has not run.
+
+Current development checks: 10 Node tests and 32 Python tests passed. The same
+32 Python tests passed in the Windows worker runtime. Syntax and package checks,
+base Skill format, platform portability, hybrid knowledge, capability contract
+and Codex adapter-gap checks passed. Visual holdings review reconciled all visible
+rows after simulated orders; clipboard sequence was unchanged. Ordinary order
+execution loads the Skill and Codex adapter only; recovery/interpretation routes
+and maintenance provenance remain deferred until their respective nodes.

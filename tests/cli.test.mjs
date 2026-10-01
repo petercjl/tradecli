@@ -30,4 +30,4 @@ test('Codex skill installation is idempotent and preserves user files',()=>{
   assert.equal(cli(['skill','install'],env).data.error.code,'SKILL_TARGET_EXISTS');
  } finally{fs.rmSync(temp,{recursive:true,force:true});}
 });
-test('machine capabilities declare read-only boundary',()=>{const c=cli(['capabilities']).data;assert.equal(c.permission,'read-only');assert.equal(c.agent,'codex');});
+test('machine capabilities declare simulated submission boundary',()=>{const c=cli(['capabilities']).data;assert.equal(c.permission,'queries-and-simulated-orders');assert.equal(c.agent,'codex');});

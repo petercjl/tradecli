@@ -1,7 +1,7 @@
 {
   "name": "@petercjl/tradecli",
-  "version": "0.1.0",
-  "description": "Codex CLI for read-only THS account queries on Windows through Parallels",
+  "version": "0.2.0-dev.1",
+  "description": "Codex THS account queries, visual holdings review and simulated-order CLI",
   "type": "module",
   "bin": {
     "tradecli": "bin/tradecli.mjs"

@@ -12,8 +12,8 @@ values to force a match or silently reuse an older successful read.
 
 Accounts are addressed by hashes of discovered labels. Labels may be masked;
 duplicate labels are ambiguous. Six-digit security codes and decimal strings are
-preserved. A successful clipboard owner check establishes the emitting process,
-not server freshness. Use the timestamps and client_display_only freshness label.
+preserved. A window screenshot and stable account attribution establish displayed evidence,
+not server freshness. Legacy clipboard recovery also checks the emitting process. Use the timestamps and client_display_only freshness label.
 
 Multi-account snapshots are sequential, not simultaneous. Partial results retain
 their own account attribution. Report restoration failure independently of rows.

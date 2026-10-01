@@ -1,6 +1,6 @@
 ---
 name: tradecli
-description: Query logged-in Windows THS accounts, funds and holdings from Codex using tradecli; diagnose the local connection and resume interrupted holdings copies.
+description: Use tradecli to switch logged-in THS accounts, review holdings images, and prepare and test buy/sell orders in simulated accounts from Codex.
 ---
 
 # tradecli
@@ -10,7 +10,7 @@ The CLI and bundled Windows worker are the execution source of truth.
 
 ## Input → strategy → output
 
-Input: a query intent and optional account IDs. Default to the current account;
+Input: a query or simulated-order intent, account ID, and for orders side, code, price and shares. Default queries to the current account;
 use multiple accounts only when the user requests that scope.
 Strategy: inspect capabilities and readiness, resolve accounts, query serially,
 handle operation states, check attribution and reconciliation.
@@ -23,7 +23,7 @@ freshness or a completed query from an incomplete operation.
 1. **Discover.** Run `tradecli version` and `tradecli capabilities --json`.
    Load [Codex adapter](adapters/codex.json) to resolve the execution contract.
    If missing, install the user-authorized npm package; use `tradecli skill source`
-   for canonical instructions. This Skill requires protocol 1 and CLI 0.1.x.
+   for canonical instructions. This Skill requires protocol 1 and CLI 0.2.x (including 0.2.0 prereleases).
 2. **Connect.** Run `tradecli doctor --json`. If configuration is missing, use
    `connections discover`, obtain the intended VM and THS executable location,
    and `config init --transport parallels --vm <vm> --exe <path>`.
@@ -37,9 +37,12 @@ freshness or a completed query from an incomplete operation.
 4. **Query.** Use `funds get`, `positions list`, optionally `--account <id>`;
    use `snapshots create --accounts <id,id>` for an explicit multi-account scope.
    GUI operations serialize within the Windows desktop. Each query restores its
-   initial account on completion; pending copies keep the target selected.
+   initial account on completion. `accounts select --account <id>` intentionally
+   keeps the selected account. A visible populated order form blocks navigation.
+   For orders, use the order branch below.
 5. **Handle outcome.** Inspect `ok`, `status`, `error`, `results`, `restoration`
-   and each result's `warnings`. For a waiting operation, read only the recovery
+   and each result's `warnings`. For holdings images, complete the visual branch below before reporting rows.
+   For a waiting legacy copy operation, read only the recovery
    route below. For inconsistent data, read only the interpretation route.
 6. **Report.** Present a concise account-specific result. Report partial results
    and unresolved warnings explicitly. Report client-display timestamps and
@@ -59,8 +62,8 @@ freshness or a completed query from an incomplete operation.
   `operations abandon <id> --yes` records abandonment and releases the query gate;
   it does not dismiss a dialog or restore the account. Use only when the user
   chooses to abandon that operation, then return to step 2.
-- Unsupported capability: terminate with `FEATURE_UNSUPPORTED`. This version
-  supplies queries only; it has no buy, sell, cancel or login implementation.
+- Unsupported capability: terminate with `FEATURE_UNSUPPORTED`. There is no
+  real-order submission, cancellation or login implementation.
 
 ## On-demand knowledge
 
@@ -85,10 +88,60 @@ CLI JSON uses protocol 1; exit 2 indicates a failed or waiting request. Windows
 worker errors are string codes; host errors contain `error.code`.
 The package manages configuration, runtime, operation records and Codex Skill
 installation. Account passwords and CAPTCHA answers are never CLI inputs.
-Holdings reads change Windows clipboard and table selection. Report restoration
+New holdings reads capture the window without copy/export. Legacy recovery can
+consume an existing clipboard payload. Report restoration
 failure even if some rows were retrieved. Never treat simulated UI interaction
 with a funded account as a simulated-money trading account.
 
 New failures enter a separately authorized development change to the worker,
 CLI contract or relevant knowledge topic. Ordinary runs do not rewrite the Skill
 or execute the development test suite. Clean-context regression is not claimed.
+
+## Visual holdings branch → step 5
+
+`positions list` and snapshots return `review_required` and private image paths.
+Inspect each image with Codex image viewing. Verify account attribution, every row,
+and that the entire holdings table fits visibly. If clipped, obscured, ambiguous,
+or stale, report incomplete; never fill missing rows from memory or another image.
+Do not fall back to copy/export. Capture again only after the page is readable.
+
+Write a new private JSON file (outside the package) with:
+
+```json
+{"capture_id":"<returned-id>","image_sha256":"<returned-hash>","complete":true,"all_rows_visible":true,"rows":[{"code":"000001","name":"Example","quantity":"100","available":"100","market_value":"1000.00"}]}
+```
+
+Run `positions review --capture <id> --input <file>` and preserve reconciliation
+warnings. The deterministic check validates the review, not the visual transcription
+itself. Only report complete holdings after image review and reconciliation.
+Return to step 5; use the interpretation knowledge route for disagreement.
+
+## Simulated order branch → step 6
+
+1. Resolve the intended account from `accounts list`; use `accounts select` when
+   switching is requested. Verify the label explicitly identifies simulated trading
+   and inspect its watermark before testing. Off-hours do not establish simulation.
+2. Obtain side, six-digit code, limit price and shares from the authorized task.
+   `orders open` and `orders inspect --side <side> --account <id>` inspect the form.
+   If amount mode is active, `orders quantity-mode` switches a blank form to shares.
+   `orders clear ... --yes` is only for explicitly authorized or task-owned drafts.
+3. `orders prepare --side <buy|sell> --account <id> --code <code> --price <price>
+   --quantity <shares>` fills and reads back the form, then returns a preview and
+   `draft_id`. Inspect the preview and ensure it matches the authorized instruction.
+4. For authorized simulated execution, run `orders submit-simulated --draft <id>
+   --account <id>`. Inspect the confirmation; `orders confirm-simulated` binds its
+   account, side, code, price and quantity before confirming once. Draft expiry is
+   five minutes. Each stage persists its attempt before interacting with the UI.
+5. `orders result --draft <id>` inspects current dialogs. A recognized success
+   receipt may be closed using `orders acknowledge --draft <id> --account <id>`.
+   `orders ledger --account <id>` captures refreshed current-day orders for visual
+   comparison of contract number, side, code, shares, price and execution status.
+6. Report preparation, submission acceptance and fill status separately, including
+   contract number when visible. No receipt means `submission_unconfirmed`, not
+   success. Do not resubmit an uncertain draft or make a replacement draft to retry.
+   Report the unresolved result and return to step 6 of the main line.
+
+`ORDER_READBACK_MISMATCH`, `ORDER_ACCOUNT_MISMATCH`, `ORDER_CONFIRMATION_MISMATCH`,
+`FORM_DRAFT_PRESENT` or unknown dialogs stop submission. Inspect the named state;
+preserve user-owned drafts and do not dismiss unknown dialogs. CAPTCHA is completed
+by the user. `ORDER_ALREADY_ATTEMPTED` returns to result/ledger inspection only.

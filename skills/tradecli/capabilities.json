@@ -12,7 +12,7 @@
       "required_features": [
         "json-output",
         "operation-recovery",
-        "read-only"
+        "no-copy-capture"
       ],
       "input_fields": [
         "command",
@@ -26,13 +26,73 @@
       "side_effects": {
         "external_mutation": true,
         "may_cost_money": false,
-        "authorization": "User requested account query; clipboard and selection only, no orders"
+        "authorization": "User-requested query or account selection; private screenshots, no new table copy"
       },
       "errors": [
         "CAPABILITY_UNAVAILABLE",
         "FEATURE_UNSUPPORTED",
         "USER_VERIFICATION_REQUIRED",
         "OPERATION_PENDING"
+      ]
+    },
+    {
+      "id": "trade.simulated-order",
+      "purpose": "Prepare and submit account-bound simulated orders",
+      "required": true,
+      "required_features": [
+        "draft-readback",
+        "simulation-only",
+        "at-most-once"
+      ],
+      "input_fields": [
+        "account",
+        "side",
+        "code",
+        "price",
+        "quantity"
+      ],
+      "output_fields": [
+        "draft_id",
+        "status",
+        "error"
+      ],
+      "side_effects": {
+        "external_mutation": true,
+        "may_cost_money": false,
+        "authorization": "Explicit user authorization for simulated orders only"
+      },
+      "errors": [
+        "SIMULATED_ACCOUNT_REQUIRED",
+        "ORDER_READBACK_MISMATCH",
+        "ORDER_ALREADY_ATTEMPTED"
+      ]
+    },
+    {
+      "id": "trade.visual-review",
+      "purpose": "Inspect holdings screenshots and create a bound review",
+      "required": true,
+      "required_features": [
+        "local-image-view",
+        "private-json-write"
+      ],
+      "input_fields": [
+        "image_path",
+        "capture_id",
+        "image_sha256"
+      ],
+      "output_fields": [
+        "rows",
+        "complete",
+        "all_rows_visible"
+      ],
+      "side_effects": {
+        "external_mutation": false,
+        "may_cost_money": false,
+        "authorization": "User requested holdings query"
+      },
+      "errors": [
+        "CAPABILITY_UNAVAILABLE",
+        "HOLDINGS_INCOMPLETE"
       ]
     }
   ]

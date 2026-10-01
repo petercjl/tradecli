@@ -1,4 +1,4 @@
-"""Query the current logged-in THS account without invoking trade methods."""
+"""THS queries and explicitly bound simulated-account order operations."""
 import argparse
 import json
 import sys
@@ -13,7 +13,7 @@ class PendingCopy(RuntimeError):
 
 
 class ReadOnlyTHS:
-    def __init__(self, exe_path):
+    def __init__(self, exe_path, allow_dialogs=False):
         import pywinauto
         self.app = pywinauto.Application(backend="win32").connect(path=exe_path, timeout=5)
         candidates = [w for w in self.app.windows(visible_only=True)
@@ -22,7 +22,8 @@ class ReadOnlyTHS:
         if len(candidates) != 1:
             raise RuntimeError("ACCOUNT_WINDOW_AMBIGUOUS")
         self.window = candidates[0]
-        self.check_ready()
+        if not allow_dialogs:
+            self.check_ready()
 
     def check_ready(self):
         blocked = False
@@ -148,18 +149,127 @@ class ReadOnlyTHS:
             raise RuntimeError("ACCOUNT_SWITCH_FAILED")
         return result
 
-    def positions(self, persist=lambda checkpoint: None):
+    def capture_positions(self):
         import win32clipboard
+        self.open_page("holdings")
+        self.check_ready()
+        sequence = win32clipboard.GetClipboardSequenceNumber()
         result = self.funds()
-        grid = self.control("CVirtualGridCtrl", 1047)
-        checkpoint = {"schema_version": 1, "requested_at": time.time(),
-                      "process_id": self.app.process, "window_handle": self.window.handle,
-                      "account": result["current_account"],
-                      "clipboard_sequence": win32clipboard.GetClipboardSequenceNumber()}
-        persist(checkpoint)
-        # A copy request only; never invoke upstream's automatic CAPTCHA handling.
-        grid.type_keys("^a^c", set_foreground=True, pause=0.2)
-        return self._collect_copy(checkpoint)
+        self.control("CVirtualGridCtrl", 1047)
+        image = capture_window_png(self.window.handle)
+        self.check_ready()
+        if self.accounts() != {k: result[k] for k in ("current_index", "current_account", "accounts")}:
+            raise RuntimeError("ACCOUNT_CHANGED_DURING_READ")
+        unchanged = sequence == win32clipboard.GetClipboardSequenceNumber()
+        if not unchanged:
+            raise RuntimeError("CLIPBOARD_CHANGED_EXTERNALLY")
+        return dict(result, image_base64=base64.b64encode(image).decode("ascii"),
+                    captured_at=time.time(), source="window_image", review_required=True,
+                    clipboard_unchanged=True)
+
+    def open_page(self, page):
+        if page not in ("buy", "sell", "holdings"):
+            raise RuntimeError("PAGE_UNSUPPORTED")
+        self.check_ready()
+        # Navigation must preserve any draft already visible on the desktop.
+        edits = [c for c in self.window.descendants() if c.class_name() == "Edit"
+                 and c.control_id() in (1032, 1034) and c.is_visible()]
+        if any(read_edit(c) for c in edits):
+            raise RuntimeError("FORM_DRAFT_PRESENT")
+        import win32gui
+        key = {"buy": 0x70, "sell": 0x71, "holdings": 0x73}[page]
+        win32gui.PostMessage(self.window.handle, 0x100, key, 0)
+        win32gui.PostMessage(self.window.handle, 0x101, key, 0)
+        time.sleep(0.4)
+        self.check_ready()
+        if page == "holdings":
+            if self.control("Static", 2388).window_text().strip() != "资金余额":
+                raise RuntimeError("HOLDINGS_PAGE_REQUIRED")
+        else:
+            self.order_fields(page)
+
+    def order_fields(self, side):
+        self.check_ready()
+        if side not in ("buy", "sell"):
+            raise RuntimeError("ORDER_SIDE_INVALID")
+        button = self.control("Button", 1006)
+        expected = "买入" if side == "buy" else "卖出"
+        if expected not in button.window_text():
+            raise RuntimeError("ORDER_SIDE_MISMATCH")
+        values = {key: read_edit(self.control("Edit", cid))
+                  for key, cid in (("code",1032),("price",1033),("quantity",1034))}
+        label = self.control("Static",1399).window_text()
+        unit = "amount" if "金额" in label else "shares" if "数量" in label or "股数" in label else "unknown"
+        return dict(side=side, unit=unit, **values)
+
+    def prepare_order(self, request):
+        order = validate_order(request)
+        def check_account():
+            self.check_ready()
+            if account_id(self.accounts()["current_account"]) != order["account"]:
+                raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+        check_account()
+        self.open_page(order["side"])
+        if any(self.order_fields(order["side"])[k] for k in ("code","quantity")):
+            raise RuntimeError("FORM_DRAFT_PRESENT")
+        if self.order_fields(order["side"])["unit"] != "shares":
+            raise RuntimeError("ORDER_QUANTITY_MODE_REQUIRED")
+        for key, cid in (("code",1032),("price",1033),("quantity",1034)):
+            check_account()
+            self.order_fields(order["side"])
+            control = self.control("Edit",cid)
+            if not control.is_enabled():
+                raise RuntimeError("ORDER_FIELD_DISABLED")
+            # Use easytrader's select/type strategy; verify through EM_GETLINE.
+            type_numeric_edit(control, order[key])
+            time.sleep(2.0 if key == "code" else 0.3)
+        check_account()
+        actual = self.order_fields(order["side"])
+        if not order_fields_match(actual, order):
+            raise RuntimeError("ORDER_READBACK_MISMATCH")
+        return dict(actual, account_id=order["account"], submitted=False,
+                    status="prepared_for_manual_submission", captured_at=time.time(),
+                    image_base64=base64.b64encode(capture_window_png(self.window.handle)).decode("ascii"))
+
+    def assert_simulated(self, expected):
+        current = self.accounts()["current_account"]
+        if not current.startswith("模拟炒股-") or account_id(current) != expected:
+            raise RuntimeError("SIMULATED_ACCOUNT_REQUIRED")
+
+    def order_response(self):
+        dialogs = []
+        for window in self.app.windows(visible_only=True):
+            if window.handle == self.window.handle:
+                continue
+            labels = [window.window_text()] + [c.window_text() for c in window.descendants()
+                       if c.class_name() == "Static"]
+            text = "\n".join(s for s in labels if s.strip())
+            if not text:
+                continue
+            if "验证码" in text:
+                return {"status":"verification_required","dialog_text":"验证码需人工处理"}
+            buttons = [{"id":c.control_id(),"label":c.window_text()}
+                       for c in window.descendants() if c.class_name()=="Button" and c.is_visible()]
+            dialogs.append({"text":text,"buttons":buttons})
+        return {"status":"dialog_review_required" if dialogs else "submission_unconfirmed", "dialogs":dialogs}
+
+    def confirmation_window(self, order):
+        self.assert_simulated(order["account"])
+        label = self.accounts()["current_account"]
+        candidates=[]
+        for window in self.app.windows(visible_only=True):
+            if window.handle == self.window.handle:
+                continue
+            text="\n".join([window.window_text()]+[c.window_text() for c in window.descendants()
+                            if c.class_name()=="Static"])
+            if validate_confirmation(text,order,label):
+                buttons=[c for c in window.descendants() if c.class_name()=="Button"
+                         and c.control_id()==6 and c.is_visible() and c.window_text().startswith("是")]
+                if len(buttons)==1:
+                    candidates.append(buttons[0])
+        if len(candidates)!=1:
+            raise RuntimeError("ORDER_CONFIRMATION_MISMATCH")
+        return candidates[0]
 
     def resume(self, checkpoint):
         # Resume only the recorded request. Never select the grid or send keys.
@@ -236,6 +346,50 @@ import sqlite3
 import uuid
 
 
+def capture_window_png(handle):
+    """Render the window; never send copy, export or keyboard commands."""
+    import ctypes
+    import struct
+    import zlib
+    import win32gui
+    import win32ui
+    if win32gui.IsIconic(handle):
+        raise RuntimeError("WINDOW_MINIMIZED")
+    left, top, right, bottom = win32gui.GetWindowRect(handle)
+    width, height = right-left, bottom-top
+    if not (500 <= width <= 8000 and 300 <= height <= 8000):
+        raise RuntimeError("WINDOW_NOT_CAPTURE_READY")
+    dc_handle = win32gui.GetWindowDC(handle)
+    source = win32ui.CreateDCFromHandle(dc_handle)
+    target = source.CreateCompatibleDC()
+    bitmap = win32ui.CreateBitmap()
+    bitmap.CreateCompatibleBitmap(source, width, height)
+    previous = target.SelectObject(bitmap)
+    try:
+        from ctypes import wintypes
+        print_window = ctypes.windll.user32.PrintWindow
+        print_window.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+        print_window.restype = wintypes.BOOL
+        if not print_window(handle, target.GetSafeHdc(), 2):
+            raise RuntimeError("WINDOW_CAPTURE_FAILED")
+        raw = bitmap.GetBitmapBits(True)
+        if len(raw) != width*height*4:
+            raise RuntimeError("CAPTURE_FORMAT_UNSUPPORTED")
+        rgb = bytearray(width*height*3)
+        rgb[0::3], rgb[1::3], rgb[2::3] = raw[2::4], raw[1::4], raw[0::4]
+        rows = b"".join(b"\x00"+rgb[i*width*3:(i+1)*width*3] for i in range(height))
+        def chunk(kind, value):
+            return struct.pack(">I",len(value))+kind+value+struct.pack(">I",zlib.crc32(kind+value)&0xffffffff)
+        return (b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">IIBBBBB",width,height,8,2,0,0,0))
+                +chunk(b"IDAT",zlib.compress(rows))+chunk(b"IEND",b""))
+    finally:
+        target.SelectObject(previous)
+        win32gui.DeleteObject(bitmap.GetHandle())
+        target.DeleteDC()
+        source.DeleteDC()
+        win32gui.ReleaseDC(handle,dc_handle)
+
+
 def parse_grid(content):
     reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")), delimiter="\t")
     headers = reader.fieldnames or []
@@ -260,6 +414,66 @@ def parse_grid(content):
 
 def account_id(label):
     return "a_" + hashlib.sha256(label.encode("utf-8")).hexdigest()[:16]
+
+
+def validate_order(request):
+    result = {key:request.get(key) for key in ("side","code","price","quantity","account")}
+    if result["side"] not in ("buy","sell"):
+        raise RuntimeError("ORDER_SIDE_INVALID")
+    if not isinstance(result["account"],str) or not re.fullmatch(r"a_[a-f0-9]{16}",result["account"]):
+        raise RuntimeError("ACCOUNT_REQUIRED")
+    if not isinstance(result["code"],str) or not re.fullmatch(r"[0-9]{6}",result["code"]):
+        raise RuntimeError("SECURITY_CODE_INVALID")
+    if not isinstance(result["quantity"],str) or not re.fullmatch(r"[1-9][0-9]{0,8}",result["quantity"]):
+        raise RuntimeError("ORDER_QUANTITY_INVALID")
+    if (not isinstance(result["price"],str) or not re.fullmatch(r"[0-9]{1,6}(\.[0-9]{1,3})?",result["price"])
+            or Decimal(result["price"]) <= 0):
+        raise RuntimeError("ORDER_PRICE_INVALID")
+    return result
+
+
+def type_numeric_edit(control, value):
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?",value):
+        raise RuntimeError("ORDER_FIELD_VALUE_INVALID")
+    control.set_focus()
+    # Default select() derives its end from GetWindowText, empty on this client.
+    # Explicit EM_SETSEL(0, -1) selects the complete existing value.
+    control.select(0, -1)
+    control.type_keys(value, set_foreground=False, pause=0.01)
+
+
+def read_edit(control):
+    # EditWrapper.texts() includes EM_GETLINE results; GetWindowText is empty on THS.
+    values = [s.strip() for s in control.texts() if s.strip()]
+    if len(set(values)) > 1:
+        raise RuntimeError("EDIT_READBACK_AMBIGUOUS")
+    return values[-1] if values else ""
+
+
+def validate_confirmation(text, order, account_label):
+    import html
+    text=html.unescape(re.sub(r"<[^>]*>","",text))
+    side="买入" if order["side"]=="buy" else "卖出"
+    def one(pattern):
+        found=re.findall(pattern,text)
+        return found[0].strip() if len(found)==1 else None
+    try:
+        return ("验证码" not in text and "您是否确定以上"+side+"委托" in text
+                and one(r"资金帐号[：:]([^\n]+)")==account_label
+                and one(r"证券代码[：:]\s*([0-9]{6})")==order["code"]
+                and Decimal(one(side+r"价格[：:]\s*([0-9.]+)"))==Decimal(order["price"])
+                and int(one(side+r"数量[：:]\s*([0-9]+)"))==int(order["quantity"]))
+    except (TypeError,ValueError,ArithmeticError):
+        return False
+
+
+def order_fields_match(actual, order):
+    try:
+        return (actual.get("unit") == "shares" and actual["side"] == order["side"] and actual["code"] == order["code"]
+                and Decimal(actual["price"]) == Decimal(order["price"])
+                and int(actual["quantity"]) == int(order["quantity"]))
+    except (ValueError, KeyError, ArithmeticError):
+        return False
 
 
 def public_accounts(data):
@@ -330,7 +544,7 @@ def execute_operation(client, store, op, resume=False):
             store.save(op)
         while op["index"] < len(op["targets"]):
             client.switch(op["targets"][op["index"]])
-            data = client.positions(persist) if op["kind"] == "positions" else client.funds()
+            data = client.capture_positions() if op["kind"] == "positions" else client.funds()
             op["results"].append(public_accounts(data))
             op["index"] += 1
             op.pop("checkpoint",None)
@@ -380,15 +594,151 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         except Exception as exc:
             return {**result_for(op),"ok":False,"error":safe_error(exc)}
         return execute_operation(client,store,op,True)
-    if action not in ("accounts", "funds", "positions", "snapshot", "doctor"):
+    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "funds", "positions", "snapshot", "doctor"):
         raise RuntimeError("COMMAND_UNSUPPORTED")
     pending=store.pending()
     if pending:
         return {"ok":False,"error":"OPERATION_PENDING","operation_id":pending[0]["id"]}
-    client = factory(request["exe"])
+    if action in ("orders.acknowledge", "orders.result","orders.confirm-simulated"):
+        client = factory(request["exe"], allow_dialogs=True)
+    else:
+        client = factory(request["exe"])
     if action == "doctor":
         return {"ok":True,"attached":True,"account_count":len(client.accounts()["accounts"]),"interactive_session":os.environ.get("SESSIONNAME","unknown"),"read_only":True}
     if action == "accounts": return {"ok":True,**public_accounts(client.accounts())}
+    if action.startswith("orders."):
+        if action in ("orders.submit-simulated", "orders.confirm-simulated", "orders.result", "orders.acknowledge"):
+            draft = store.get(request.get("draft", ""))
+            if draft.get("kind") != "order" or draft["exe"] != request["exe"]:
+                raise RuntimeError("ORDER_DRAFT_INVALID")
+            client.assert_simulated(draft["order"]["account"])
+            if action == "orders.acknowledge":
+                if request.get("account") != draft["order"]["account"]:
+                    raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+                saved = draft.get("response", {})
+                current = client.order_response()
+                if draft["status"] != "confirmation_attempted" or current != saved:
+                    raise RuntimeError("ORDER_RECEIPT_MISMATCH")
+                side = "买入" if draft["order"]["side"] == "buy" else "卖出"
+                receipts = [d for d in current.get("dialogs", []) if re.search(
+                    "您的"+side+r"委托已成功提交，合同编号：[0-9]+",d["text"])]
+                if len(receipts) != 1 or len(current["dialogs"]) != 1:
+                    raise RuntimeError("ORDER_RECEIPT_REQUIRED")
+                matches=[]
+                for window in client.app.windows(visible_only=True):
+                    if window.handle == client.window.handle: continue
+                    text="\n".join(c.window_text() for c in window.descendants() if c.class_name()=="Static")
+                    if not re.search("您的"+side+r"委托已成功提交，合同编号：[0-9]+",text): continue
+                    matches.extend(c for c in window.descendants() if c.class_name()=="Button" and c.control_id()==2 and c.is_visible() and c.window_text()=="确定")
+                if len(matches)!=1: raise RuntimeError("ORDER_RECEIPT_MISMATCH")
+                client.assert_simulated(draft["order"]["account"])
+                draft["status"]="receipt_acknowledgment_attempted"
+                store.save(draft)
+                matches[0].click()
+                draft["accepted_receipt"]={"status":"submission_accepted","filled":None,
+                    "contract_no":re.search(r"合同编号：([0-9]+)",receipts[0]["text"]).group(1),"receipt":receipts[0]}
+                store.save(draft)
+                return {"ok":True,"draft_id":draft["id"],**draft["accepted_receipt"]}
+            if action == "orders.result":
+                response=client.order_response()
+                if response.get("dialogs"):
+                    draft["response"]=response
+                    store.save(draft)
+                return {"ok":True,"draft_id":draft["id"],"attempt_status":draft["status"],
+                        "accepted_receipt":draft.get("accepted_receipt"),**response}
+            if action == "orders.confirm-simulated":
+                if draft["status"] != "submission_attempted":
+                    raise RuntimeError("ORDER_ALREADY_ATTEMPTED")
+                if request.get("account") != draft["order"]["account"] or not 0 <= time.time()-draft["requested_at"] <= 300:
+                    raise RuntimeError("ORDER_CONFIRMATION_EXPIRED_OR_MISMATCH")
+                button=client.confirmation_window(draft["order"])
+                client.assert_simulated(draft["order"]["account"])
+                draft["status"]="confirmation_attempted"
+                store.save(draft)
+                button.set_focus()
+                button.type_keys("%Y", set_foreground=True)
+                time.sleep(0.8)
+                response=client.order_response()
+                draft["response"]=response
+                store.save(draft)
+                return {"ok":True,"draft_id":draft["id"],"simulation_only":True,"confirmation_attempted":True,**response}
+            if draft["status"] != "prepared":
+                raise RuntimeError("ORDER_ALREADY_ATTEMPTED")
+            if not 0 <= time.time()-draft["requested_at"] <= 300:
+                raise RuntimeError("ORDER_DRAFT_EXPIRED")
+            if request.get("account") != draft["order"]["account"]:
+                raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+            client.check_ready()
+            if not order_fields_match(client.order_fields(draft["order"]["side"]),draft["order"]):
+                raise RuntimeError("ORDER_READBACK_MISMATCH")
+            client.assert_simulated(draft["order"]["account"])
+            draft["status"] = "submission_attempted"
+            store.save(draft)
+            # At-most-once click. No automatic confirmation or retry after uncertainty.
+            client.control("Button",1006).click()
+            time.sleep(0.6)
+            response = client.order_response()
+            draft["response"] = response
+            store.save(draft)
+            return {"ok":True,"draft_id":draft["id"],"simulation_only":True,"submission_attempted":True,**response}
+        if request.get("account") != account_id(client.accounts()["current_account"]):
+            raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+        if action == "orders.ledger":
+            client.check_ready()
+            tree = client.control("SysTreeView32",129)
+            node = tree.get_item(["查询[F4]", "当日委托"])
+            node.select()
+            client.window.type_keys("{F5}", set_foreground=True)
+            time.sleep(1.0)
+            client.check_ready()
+            if not tree.is_selected(["查询[F4]", "当日委托"]):
+                raise RuntimeError("ORDER_LEDGER_PAGE_MISMATCH")
+            if request["account"] != account_id(client.accounts()["current_account"]):
+                raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+            return {"ok":True,"submitted":False,"results":[{"account_id":request["account"],"captured_at":time.time(),
+                    "source":"order_ledger_window","review_required":True,
+                    "image_base64":base64.b64encode(capture_window_png(client.window.handle)).decode("ascii")}]}
+        if action == "orders.clear":
+            if not request.get("yes"):
+                raise RuntimeError("CONFIRMATION_REQUIRED")
+            client.order_fields(request.get("side"))
+            for cid in (1034,1033,1032):
+                if request["account"] != account_id(client.accounts()["current_account"]):
+                    raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+                client.control("Edit",cid).type_keys("^a{BACKSPACE}",set_foreground=True)
+            return {"ok":True,"submitted":False,"fields":client.order_fields(request["side"])}
+        if action == "orders.quantity-mode":
+            fields = client.order_fields(request.get("side"))
+            if any(fields[key] for key in ("code","quantity")):
+                raise RuntimeError("FORM_DRAFT_PRESENT")
+            if fields["unit"] == "amount":
+                client.control("Static",1399).click_input()
+                time.sleep(0.3)
+            fields = client.order_fields(request["side"])
+            return {"ok":fields["unit"]=="shares","submitted":False,"fields":fields}
+        if action == "orders.inspect":
+            return {"ok":True,"submitted":False,"fields":client.order_fields(request.get("side")),
+                    "results":[{"account_id":request["account"],"captured_at":time.time(),
+                    "image_base64":base64.b64encode(capture_window_png(client.window.handle)).decode("ascii")}]}
+        if action == "orders.open":
+            if request.get("side") not in ("buy","sell"):
+                raise RuntimeError("ORDER_SIDE_INVALID")
+            client.open_page(request["side"])
+            return {"ok":True,"submitted":False,"fields":client.order_fields(request["side"])}
+        result = client.prepare_order(request)
+        draft={"id":str(uuid.uuid4()),"kind":"order","exe":request["exe"],"order":validate_order(request),
+               "status":"prepared","requested_at":time.time(),"results":[]}
+        store.save(draft)
+        return {"ok":True,"draft_id":draft["id"],"submitted":False,"results":[result],"status":"prepared_for_manual_submission"}
+    if action == "accounts.select":
+        if not request.get("account"):
+            raise RuntimeError("ACCOUNT_REQUIRED")
+        target = resolve_account(client, request["account"])
+        original = account_id(client.accounts()["current_account"])
+        client.open_page("holdings")
+        result = client.switch(target)
+        return {"ok":True,"previous_account_id":original,"selection_retained":True,
+                **public_accounts(result)}
     identities=request.get("accounts") if action=="snapshot" else [request.get("account")]
     if not isinstance(identities,list) or not identities or len(identities)!=len(set(identities)):
         raise RuntimeError("ACCOUNTS_REQUIRED_OR_DUPLICATED")

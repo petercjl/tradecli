@@ -9,7 +9,7 @@
       "features": [
         "json-output",
         "operation-recovery",
-        "read-only"
+        "no-copy-capture"
       ],
       "implementation": {
         "kind": "cli",
@@ -20,6 +20,32 @@
           "tradecli schema"
         ],
         "invocation": "Use the host shell execution tool with argument-safe quoting; parse JSON even for exit 2. Preserve the CLI data envelope; map operation_id to task_id when normalizing. No paid actions."
+      }
+    },
+    {
+      "capability_id": "trade.simulated-order",
+      "status": "implemented",
+      "features": [
+        "draft-readback",
+        "simulation-only",
+        "at-most-once"
+      ],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "Use the orders commands documented by tradecli --help. Execute only authorized simulated orders."
+      }
+    },
+    {
+      "capability_id": "trade.visual-review",
+      "status": "implemented",
+      "features": [
+        "local-image-view",
+        "private-json-write"
+      ],
+      "implementation": {
+        "kind": "native-tool",
+        "invocation": "Use Codex view_image for the returned local image_path, then the host filesystem tool to write a new private JSON review. Validate through tradecli positions review."
       }
     }
   ]
