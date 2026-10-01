@@ -280,6 +280,101 @@ class ReadOnlyTHS:
         return dict(order, unit="shares", price_source="ths_default_price_field",
                     captured_at=time.time())
 
+    def open_market_page(self, side):
+        if side not in ("buy", "sell"):
+            raise RuntimeError("ORDER_SIDE_INVALID")
+        self.check_ready()
+        edits = [c for c in self.window.descendants() if c.class_name() == "Edit"
+                 and c.control_id() in (1032, 1034) and c.is_visible()]
+        if any(read_edit(c) for c in edits):
+            raise RuntimeError("FORM_DRAFT_PRESENT")
+        target = "买入" if side == "buy" else "卖出"
+        tree = self.control("SysTreeView32", 129)
+        tree.get_item(["市价委托", target]).select()
+        time.sleep(0.4)
+        self.check_ready()
+        if not tree.is_selected(["市价委托", target]):
+            raise RuntimeError("MARKET_PAGE_MISMATCH")
+        self.market_order_fields(side)
+
+    def market_order_fields(self, side):
+        self.check_ready()
+        target = "买入" if side == "buy" else "卖出" if side == "sell" else None
+        if target is None:
+            raise RuntimeError("ORDER_SIDE_INVALID")
+        if self.control("Static", 1478).window_text().strip() != "市价" + target:
+            raise RuntimeError("MARKET_PAGE_MISMATCH")
+        if self.control("Button", 1006).window_text().strip() != target:
+            raise RuntimeError("ORDER_SIDE_MISMATCH")
+        if "数量" not in self.control("Static", 1399).window_text():
+            raise RuntimeError("ORDER_QUANTITY_MODE_REQUIRED")
+        combo = self.control("ComboBox", 1541)
+        labels = combo.item_texts()
+        index = combo.selected_index()
+        strategy = labels[index] if 0 <= index < len(labels) else ""
+        return {"side": side, "unit": "shares", "code": read_edit(self.control("Edit", 1032)),
+                "quantity": read_edit(self.control("Edit", 1034)),
+                "reference_price": read_edit(self.control("Edit", 1033)),
+                "market_strategy": strategy, "market_strategy_index": index,
+                "available_strategies": labels}
+
+    def market_page_active(self, side):
+        target = "买入" if side == "buy" else "卖出" if side == "sell" else None
+        if target is None:
+            raise RuntimeError("ORDER_SIDE_INVALID")
+        return any(c.class_name() == "Static" and c.control_id() == 1478
+                   and c.is_visible() and c.window_text().strip() == "市价" + target
+                   for c in self.window.descendants())
+
+    def reset_market_form(self, side):
+        self.market_order_fields(side)
+        reset = self.control("Button", 1007)
+        if reset.window_text().strip() != "重填":
+            raise RuntimeError("MARKET_RESET_MISMATCH")
+        reset.click()
+        fields = self.market_order_fields(side)
+        if fields["code"] or fields["quantity"]:
+            raise RuntimeError("ORDER_CLEAR_FAILED")
+        return fields
+
+    def market_order(self, request):
+        side, code, account = (request[key] for key in ("side", "code", "account"))
+        kind = request.get("account_kind", "simulated")
+        self.assert_trading_account(account, kind)
+        self.open_market_page(side)
+        fields = self.market_order_fields(side)
+        if fields["code"] or fields["quantity"]:
+            raise RuntimeError("FORM_DRAFT_PRESENT")
+        control = self.control("Edit", 1032)
+        if not control.is_enabled():
+            raise RuntimeError("ORDER_FIELD_DISABLED")
+        type_numeric_edit(control, code)
+        time.sleep(2.0)
+        self.assert_trading_account(account, kind)
+        fields = self.market_order_fields(side)
+        if fields["code"] != code or fields["quantity"]:
+            raise RuntimeError("MARKET_ORDER_UNAVAILABLE")
+        if (not fields["market_strategy"] or "不支持市价委托" in fields["market_strategy"]
+                or fields["market_strategy_index"] < 0):
+            self.reset_market_form(side)
+            raise RuntimeError("MARKET_ORDER_UNAVAILABLE")
+        if (not re.fullmatch(r"[0-9]{1,6}(?:\.[0-9]{1,3})?", fields["reference_price"])
+                or Decimal(fields["reference_price"]) <= 0):
+            self.reset_market_form(side)
+            raise RuntimeError("MARKET_REFERENCE_PRICE_UNAVAILABLE")
+        quantity = self.control("Edit", 1034)
+        if not quantity.is_enabled():
+            raise RuntimeError("ORDER_FIELD_DISABLED")
+        type_numeric_edit(quantity, request["quantity"])
+        time.sleep(0.3)
+        actual = self.market_order_fields(side)
+        order = dict(request, market_strategy=fields["market_strategy"],
+                     market_strategy_index=fields["market_strategy_index"])
+        if not market_fields_match(actual, order):
+            raise RuntimeError("ORDER_READBACK_MISMATCH")
+        return dict(order, unit="shares", reference_price=actual["reference_price"],
+                    captured_at=time.time())
+
     def assert_simulated(self, expected):
         current = self.accounts()["current_account"]
         if not current.startswith("模拟炒股-") or account_id(current) != expected:
@@ -324,7 +419,9 @@ class ReadOnlyTHS:
                 continue
             text="\n".join([window.window_text()]+[c.window_text() for c in window.descendants()
                             if c.class_name()=="Static"])
-            if validate_confirmation(text,order,label):
+            matches = (validate_market_confirmation(text, order, label)
+                       if order.get("mode") == "market" else validate_confirmation(text, order, label))
+            if matches:
                 buttons=[c for c in window.descendants() if c.class_name()=="Button"
                          and c.control_id()==6 and c.is_visible() and c.window_text().startswith("是")]
                 if len(buttons)==1:
@@ -557,6 +654,24 @@ def validate_confirmation(text, order, account_label):
         return False
 
 
+def validate_market_confirmation(text, order, account_label):
+    import html
+    text = html.unescape(re.sub(r"<[^>]*>", "", text))
+    side = "买入" if order["side"] == "buy" else "卖出"
+    def one(pattern):
+        found = re.findall(pattern, text)
+        return found[0].strip() if len(found) == 1 else None
+    try:
+        shareholder = one(r"股东帐号[：:]\s*([0-9A-Za-z]+)")
+        return ("验证码" not in text and "您是否确定以上市价" + side + "委托" in text
+                and bool(shareholder)
+                and one(r"证券代码[：:]\s*([0-9]{6})") == order["code"]
+                and int(one(side + r"数量[：:]\s*([0-9]+)")) == int(order["quantity"])
+                and one(r"委托策略[：:]([^\n]+)") == order["market_strategy"])
+    except (TypeError, ValueError, ArithmeticError, KeyError):
+        return False
+
+
 def receipt_contract(response, side):
     dialogs = response.get("dialogs") or []
     if len(dialogs) != 1:
@@ -615,6 +730,20 @@ def order_fields_match(actual, order):
                 and Decimal(actual["price"]) == Decimal(order["price"])
                 and int(actual["quantity"]) == int(order["quantity"]))
     except (ValueError, KeyError, ArithmeticError):
+        return False
+
+
+def market_fields_match(actual, order):
+    try:
+        return (actual.get("unit") == "shares" and actual["side"] == order["side"]
+                and actual["code"] == order["code"]
+                and int(actual["quantity"]) == int(order["quantity"])
+                and actual["market_strategy"] == order["market_strategy"]
+                and actual["market_strategy_index"] == order["market_strategy_index"]
+                and "不支持市价委托" not in actual["market_strategy"]
+                and re.fullmatch(r"[0-9]{1,6}(?:\.[0-9]{1,3})?", actual["reference_price"])
+                and Decimal(actual["reference_price"]) > 0)
+    except (ValueError, KeyError, TypeError):
         return False
 
 
@@ -708,6 +837,14 @@ def acknowledge_batch_receipt(client, order, response):
 
 def clear_batch_form(client, order):
     client.assert_trading_account(order["account"], order.get("account_kind", "simulated"))
+    if order.get("mode") == "market":
+        fields = client.market_order_fields(order["side"])
+        if not fields["code"] and not fields["quantity"]:
+            return
+        if not market_fields_match(fields, order):
+            raise RuntimeError("ORDER_READBACK_MISMATCH")
+        client.reset_market_form(order["side"])
+        return
     fields=client.order_fields(order["side"])
     if not any(fields[key] for key in ("code","price","quantity")):
         return
@@ -730,15 +867,25 @@ def execute_batch(client, store, batch):
             client.assert_trading_account(batch["account"], batch.get("account_kind", "simulated"))
             if entry["status"] != "queued":
                 raise RuntimeError("BATCH_ORDER_ALREADY_ATTEMPTED")
-            if batch.get("mode") == "default_price":
+            if batch.get("mode") == "market":
+                prepared = client.market_order(order)
+                order.update(mode="market", market_strategy=prepared["market_strategy"],
+                             market_strategy_index=prepared["market_strategy_index"])
+            elif batch.get("mode") == "default_price":
                 prepared=client.default_price_order(order)
                 order["price"]=prepared["price"]
             else:
                 prepared=client.prepare_order(order)
             entry["status"]="prepared"
-            entry["preview"]={k:prepared[k] for k in ("side","unit","code","price","quantity","captured_at")}
+            preview_keys = (("side", "unit", "code", "quantity", "market_strategy",
+                             "reference_price", "captured_at") if batch.get("mode") == "market"
+                            else ("side", "unit", "code", "price", "quantity", "captured_at"))
+            entry["preview"] = {k: prepared[k] for k in preview_keys}
             store.save(batch)
-            if not order_fields_match(client.order_fields(order["side"]),order):
+            fields_match = (market_fields_match(client.market_order_fields(order["side"]), order)
+                            if batch.get("mode") == "market" else
+                            order_fields_match(client.order_fields(order["side"]), order))
+            if not fields_match:
                 raise RuntimeError("ORDER_READBACK_MISMATCH")
             client.assert_trading_account(batch["account"], batch.get("account_kind", "simulated"))
             entry["status"]="submit_attempted"
@@ -872,22 +1019,24 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         except Exception as exc:
             return {**result_for(op),"ok":False,"error":safe_error(exc)}
         return execute_operation(client,store,op,True)
-    if action in ("batches.prepare-default", "batches.prepare-real-default"):
+    if action in ("batches.prepare-default", "batches.prepare-real-default",
+                  "batches.prepare-market", "batches.prepare-real-market"):
         pending=store.pending()
         if pending:
             return {"ok":False,"error":"OPERATION_PENDING","operation_id":pending[0]["id"]}
         account=request.get("account")
         orders=validate_default_batch_orders(request.get("orders"),account)
-        kind="real" if action == "batches.prepare-real-default" else "simulated"
+        kind="real" if action in ("batches.prepare-real-default", "batches.prepare-real-market") else "simulated"
+        mode = "market" if action.endswith("market") else "default_price"
         if kind == "real":
             client=factory(request["exe"])
             client.assert_trading_account(account,kind)
         orders=[dict(order,account_kind=kind) for order in orders]
-        digest=batch_digest(account,[{"mode":"default_price","account_kind":kind},*orders])
+        digest=batch_digest(account,[{"mode":mode,"account_kind":kind},*orders])
         if store.find_batch_digest(digest):
             raise RuntimeError("BATCH_DUPLICATE_PLAN")
         batch={"id":str(uuid.uuid4()),"kind":"batch","exe":request["exe"],
-               "account":account,"mode":"default_price","account_kind":kind,"digest":digest,
+               "account":account,"mode":mode,"account_kind":kind,"digest":digest,
                "status":"prepared","requested_at":time.time(),
                "estimated_buy_total":None,"available_before":None,
                "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
@@ -1038,6 +1187,9 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         if action == "orders.clear":
             if not request.get("yes"):
                 raise RuntimeError("CONFIRMATION_REQUIRED")
+            if client.market_page_active(request.get("side")):
+                return {"ok":True,"submitted":False,
+                        "fields":client.reset_market_form(request["side"])}
             client.order_fields(request.get("side"))
             for cid in (1034,1033,1032):
                 if request["account"] != account_id(client.accounts()["current_account"]):
@@ -1054,7 +1206,10 @@ def dispatch(request, store, factory=ReadOnlyTHS):
             fields = client.order_fields(request["side"])
             return {"ok":fields["unit"]=="shares","submitted":False,"fields":fields}
         if action == "orders.inspect":
-            return {"ok":True,"submitted":False,"fields":client.order_fields(request.get("side")),
+            fields = (client.market_order_fields(request.get("side"))
+                      if client.market_page_active(request.get("side"))
+                      else client.order_fields(request.get("side")))
+            return {"ok":True,"submitted":False,"fields":fields,
                     "results":[{"account_id":request["account"],"captured_at":time.time(),
                     "image_base64":base64.b64encode(capture_window_png(client.window.handle)).decode("ascii")}]}
         if action == "orders.open":

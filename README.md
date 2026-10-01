@@ -46,7 +46,7 @@ Windows 执行端、独立虚拟环境和私有操作记录保存在用户 LOCAL
 
 ## 模拟买卖
 
-开发版 `0.2.0-dev.4` 提供以下流程，尚未发布到 npm：
+单笔限价模拟委托提供以下流程：
 
 ```sh
 tradecli orders prepare --side buy --account <id> --code <六位代码> --price <价格> --quantity <股数>
@@ -63,7 +63,7 @@ tradecli orders ledger --account <id>
 结果不明时查询回执和委托，不自动重发。委托受理不等于成交。
 `orders inspect/open/clear/quantity-mode` 分别检查、打开表单、显式清空、切换为股数输入。
 清空使用 `--yes`，只用于用户授权清理的草稿。
-单笔提交命令只接受明确标识为模拟炒股的账户。真实账户仅开放下文的整批默认价格流程。
+单笔提交命令只接受明确标识为模拟炒股的账户。真实账户使用下文的整批确认流程。
 没有撤单、密码输入功能。
 
 ## 模拟批量任务
@@ -85,19 +85,21 @@ tradecli batches status --batch <batch_id>
 成功回执只证明委托受理，不证明成交。执行后用 `orders ledger --account <id>` 核对当日委托。
 详见 [批量执行契约](docs/batch-execution.md)。
 
-若使用同花顺表单自动填入的默认价格，计划只写方向、代码和股数：
+市价委托计划只写方向、代码和股数：
 
 ```json
 {"orders":[{"side":"buy","code":"600221","quantity":"100"},{"side":"sell","code":"300359","quantity":"100"}]}
 ```
 
-先运行 `batches validate-default --input <orders.json>` 和
-`batches prepare-default --input <orders.json> --account <模拟账户ID>`。
-准备阶段校验清单并核对模拟账户；用户只确认账户、买卖方向、代码和股数。
-用户确认后使用同一个 `batches run-simulated` 命令执行。执行时逐笔重新读取
-同花顺默认价格，绑定到该笔确认框；价格可能与预览不同。若默认价格为空、字段变化或
-回执不明，立即停止。真实账户使用 `batches prepare-real-default` 和 `batches run-real`，
-两个命令都会绑定账户类型与账户 ID。执行前通过下面的策略计划流程完成持仓复核和整表确认。
+先运行 `batches validate-market --input <orders.json>` 和
+`batches prepare-market --input <orders.json> --account <模拟账户ID>`。
+准备阶段校验清单并核对账户；用户确认账户、买卖方向、代码和股数。
+用户确认后用 `batches run-simulated` 执行。Windows 执行端逐笔打开“市价委托”页面，
+输入股票代码，读取该股票可用的市价策略和同花顺自动显示的参考价格，再输入股数。
+实际策略随交易所和账户而异；如果股票不支持市价委托、字段变化或回执不明，整批停下。
+真实账户使用 `batches prepare-real-market` 和 `batches run-real`，绑定账户类型与 ID。
+执行前通过下面的策略计划流程完成持仓复核和整表确认。界面“最新价格”是参考显示，
+市价委托的成交价格与成交股数以交易所回报为准。
 
 ## 策略计划与整批确认
 
@@ -111,15 +113,16 @@ tradecli batches status --batch <batch_id>
 已持有股票的名称来自持仓复核；新买入股票需提供核实过的名称。运行：
 
 ```sh
-tradecli batches plan-default --strategy <strategy.json> --review <positions-review.json> --account <账户ID>
+tradecli batches plan-market --strategy <strategy.json> --review <positions-review.json> --account <账户ID>
 ```
 
 返回每笔的代码、名称、当前股数、方向、买卖股数和计划后股数，以及可执行的 `orders_path`。
-Skill 先用表格确认完整清单和账户，再准备并执行匹配的批次。价格在执行时由同花顺填入。
+Skill 先用表格确认完整清单和账户，再准备并执行匹配的市价委托批次。
 完成后按合同编号核对当日委托，并区分委托受理、实际成交、结果不明和未尝试的订单。
 计划后股数只有在相应订单成交后才成为实际持股数。真实账户流程已通过自动化单元测试，
-并在真实账户走过一次确认与提交路径；交易端明确拒绝了非受理时段的测试买单，
-未取得合同编号，后续卖单未执行。真实账户成功受理及成交路径尚未实测。
+此前普通买卖入口在真实账户走过一次确认与提交路径；交易端以系统初始化前备份状态
+拒绝该笔委托，未取得合同编号，后续卖单未执行。市价委托的提交、成功受理及成交路径
+仍需在适合的交易时段实测。
 
 ## 范围与维护
 

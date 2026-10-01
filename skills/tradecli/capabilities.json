@@ -71,7 +71,7 @@
       "id": "trade.simulated-batch",
       "purpose": "Execute an authorized simulated order plan in one Windows worker",
       "required": true,
-      "required_features": ["single-worker", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-plan"],
+      "required_features": ["single-worker", "receipt-polling", "stop-on-uncertainty", "market-order-form", "user-confirmed-plan"],
       "input_fields": ["account", "orders", "batch_id", "digest"],
       "output_fields": ["batch_id", "status", "orders", "error"],
       "side_effects": {
@@ -85,7 +85,7 @@
       "id": "trade.strategy-plan",
       "purpose": "Calculate exact per-security share changes from reviewed THS holdings and a strategy",
       "required": true,
-      "required_features": ["review-bound", "account-bound", "before-after-shares", "default-price-orders"],
+      "required_features": ["review-bound", "account-bound", "before-after-shares", "market-orders"],
       "input_fields": ["account", "review_path", "strategy"],
       "output_fields": ["rows", "orders_path", "plan_path"],
       "side_effects": {
@@ -97,9 +97,9 @@
     },
     {
       "id": "trade.confirmed-batch",
-      "purpose": "Execute one user-confirmed default-price batch in the bound simulated or real account",
+      "purpose": "Execute one user-confirmed market-order batch in the bound simulated or real account",
       "required": true,
-      "required_features": ["single-worker", "real-or-simulated-account-binding", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-table"],
+      "required_features": ["single-worker", "real-or-simulated-account-binding", "receipt-polling", "stop-on-uncertainty", "market-order-form", "user-confirmed-table"],
       "input_fields": ["account", "account_kind", "orders", "batch_id", "digest"],
       "output_fields": ["batch_id", "status", "orders", "error"],
       "side_effects": {

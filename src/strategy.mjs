@@ -8,7 +8,7 @@ const shares=value=>typeof value==='string' && /^(0|[1-9]\d{0,8})$/.test(value) 
 const code=value=>typeof value==='string' && /^\d{6}$/.test(value);
 const name=value=>typeof value==='string' && value.trim() && value.trim().length<=40;
 
-export function buildStrategyPlan(review,strategy,account=review?.account_id) {
+export function buildStrategyPlan(review,strategy,account=review?.account_id,priceMode='client_default') {
  if(!review || review.ok!==true || review.status!=='reviewed' || review.complete!==true || !Array.isArray(review.positions)
     || review.source!=='codex_visual_review' || !/^a_[a-f0-9]{16}$/.test(review.account_id||''))throw new Fault('HOLDINGS_REVIEW_REQUIRED');
  if(account!==review.account_id)throw new Fault('PLAN_ACCOUNT_MISMATCH');
@@ -55,16 +55,16 @@ export function buildStrategyPlan(review,strategy,account=review?.account_id) {
  }
  if(!orders.length)throw new Fault('STRATEGY_NO_CHANGE');
  // The batch validator remains the execution contract for quantity and duplicate buys.
- return {account_id:account,source_capture_id:review.capture_id,source_captured_at:review.captured_at,price_mode:'client_default',rows,orders};
+ return {account_id:account,source_capture_id:review.capture_id,source_captured_at:review.captured_at,price_mode:priceMode,rows,orders};
 }
 
-export function planStrategyFile(reviewFile,strategyFile,account) {
+export function planStrategyFile(reviewFile,strategyFile,account,priceMode='client_default') {
  let review,strategy;
  try {review=JSON.parse(fs.readFileSync(reviewFile,'utf8'));strategy=JSON.parse(fs.readFileSync(strategyFile,'utf8'));}
  catch {throw new Fault('STRATEGY_INPUT_INVALID');}
  const capturesRoot=path.resolve(home(),'captures')+path.sep;
  if(!path.resolve(reviewFile).startsWith(capturesRoot) || !/^review-[a-f0-9-]+\.json$/.test(path.basename(reviewFile)))throw new Fault('HOLDINGS_REVIEW_REQUIRED');
- const plan=buildStrategyPlan(review,strategy,account);
+ const plan=buildStrategyPlan(review,strategy,account,priceMode);
  const dir=path.join(home(),'plans');privateDir(dir);
  const id=crypto.randomUUID();const ordersPath=path.join(dir,`${id}-orders.json`);
  fs.writeFileSync(ordersPath,JSON.stringify({orders:plan.orders},null,2)+'\n',{flag:'wx',mode:0o600});

@@ -35,10 +35,14 @@
     "orders ledger",
     "batches validate",
     "batches validate-default",
+    "batches validate-market",
     "batches plan-default",
+    "batches plan-market",
     "batches prepare",
     "batches prepare-default",
     "batches prepare-real-default",
+    "batches prepare-market",
+    "batches prepare-real-market",
     "batches run-simulated",
     "batches run-real",
     "batches status"
@@ -50,6 +54,7 @@
     "Explicit simulated-account order submission",
     "Explicit simulated-account batch submission (one Windows worker, up to fifteen orders)",
     "Explicit real-account default-price batch submission after a reviewed holdings plan and user confirmation",
+    "Explicit real-account market-order batch submission after a reviewed holdings plan and user confirmation",
     "Legacy copy recovery only",
     "Explicit runtime and Skill installation"
   ],
@@ -61,8 +66,8 @@
     "Client display freshness, not broker-server verification",
     "Holdings require Codex image review; clipped rows cannot be accepted as complete",
     "Equal fund displays can prevent automatic account switching",
-    "Individual orders remain simulated-only; real-account execution supports confirmed default-price batches only; cancellation is unavailable",
-    "Real-account batch execution has not yet been live-tested",
+    "Individual orders remain simulated-only; real-account execution supports confirmed market or default-price batches; cancellation is unavailable",
+    "Market-order acceptance and fill remain untested in a live funded account",
     "Unknown submission outcome must not be retried automatically"
   ]
 }
