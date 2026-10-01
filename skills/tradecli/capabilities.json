@@ -1,0 +1,39 @@
+{
+  "schema": "portable-skill-capabilities",
+  "schema_version": "1.0.0",
+  "target_platforms": [
+    "codex"
+  ],
+  "capabilities": [
+    {
+      "id": "trade.query",
+      "purpose": "Read THS client accounts and snapshots via the installed CLI",
+      "required": true,
+      "required_features": [
+        "json-output",
+        "operation-recovery",
+        "read-only"
+      ],
+      "input_fields": [
+        "command",
+        "account-scope"
+      ],
+      "output_fields": [
+        "ok",
+        "results",
+        "error"
+      ],
+      "side_effects": {
+        "external_mutation": true,
+        "may_cost_money": false,
+        "authorization": "User requested account query; clipboard and selection only, no orders"
+      },
+      "errors": [
+        "CAPABILITY_UNAVAILABLE",
+        "FEATURE_UNSUPPORTED",
+        "USER_VERIFICATION_REQUIRED",
+        "OPERATION_PENDING"
+      ]
+    }
+  ]
+}

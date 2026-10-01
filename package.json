@@ -1,0 +1,37 @@
+{
+  "name": "@petercjl/tradecli",
+  "version": "0.1.0",
+  "description": "Codex CLI for read-only THS account queries on Windows through Parallels",
+  "type": "module",
+  "bin": {
+    "tradecli": "bin/tradecli.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/petercjl/tradecli.git"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "capabilities.json",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "docs",
+    "worker/ths.py",
+    "worker/requirements.txt"
+  ],
+  "scripts": {
+    "test": "node --test && python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "check": "node --check bin/tradecli.mjs && node --check src/cli.mjs && python3 -m py_compile worker/ths.py",
+    "prepack": "npm run check"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

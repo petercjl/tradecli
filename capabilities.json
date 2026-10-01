@@ -1,0 +1,41 @@
+{
+  "agent": "codex",
+  "provider": "ths-desktop",
+  "permission": "read-only",
+  "commands": [
+    "connections discover",
+    "config init",
+    "runtime install",
+    "runtime status",
+    "doctor",
+    "accounts list",
+    "funds get",
+    "positions list",
+    "snapshots create",
+    "operations status",
+    "operations resume",
+    "operations abandon",
+    "skill source",
+    "skill status",
+    "skill install",
+    "skill update",
+    "update check",
+    "update install"
+  ],
+  "sideEffects": [
+    "Local private configuration and operation records",
+    "Account selection and restoration",
+    "Holdings table selection and clipboard copy",
+    "Explicit runtime and skill installation"
+  ],
+  "transports": {
+    "parallels": "implemented",
+    "windows": "implemented_not_live_tested"
+  },
+  "limitations": [
+    "Client display freshness, not broker-server verification",
+    "Manual CAPTCHA; cannot promise unattended operation",
+    "Equal fund displays can prevent automatic account switching",
+    "No order submission, cancellation or credential handling"
+  ]
+}

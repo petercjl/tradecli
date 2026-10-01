@@ -1,0 +1,4 @@
+interface:
+  display_name: "tradecli"
+  short_description: "Query Windows THS accounts through the tradecli CLI"
+  default_prompt: "Use $tradecli to inspect my logged-in THS accounts and holdings."

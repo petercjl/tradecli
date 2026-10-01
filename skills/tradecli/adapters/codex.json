@@ -1,0 +1,26 @@
+{
+  "schema": "portable-skill-adapter",
+  "schema_version": "1.0.0",
+  "platform": "codex",
+  "mappings": [
+    {
+      "capability_id": "trade.query",
+      "status": "implemented",
+      "features": [
+        "json-output",
+        "operation-recovery",
+        "read-only"
+      ],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "discovery": [
+          "tradecli version",
+          "tradecli capabilities --json",
+          "tradecli schema"
+        ],
+        "invocation": "Use the host shell execution tool with argument-safe quoting; parse JSON even for exit 2. Preserve the CLI data envelope; map operation_id to task_id when normalizing. No paid actions."
+      }
+    }
+  ]
+}
