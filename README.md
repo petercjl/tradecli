@@ -1,8 +1,8 @@
 # tradecli
 
-Codex 用的同花顺只读查询插件：一个 npm CLI、一份配套 Skill、一个 Windows 执行端。
+Codex 用的同花顺查询与批量交易插件：一个 npm CLI、一份配套 Skill、一个 Windows 执行端。
 借鉴 [easytrader](https://github.com/shidenggui/easytrader) 的 Win32 适配方法，独立管理
-运行环境、账户查询、验证码恢复和结构化结果。
+运行环境、账户切换、持仓复核、策略计划、模拟及真实账户批量委托和结构化结果。
 
 ## 安装
 
@@ -28,33 +28,101 @@ tradecli positions list --json
 Windows 执行端、独立虚拟环境和私有操作记录保存在用户 LOCALAPPDATA 下的 tradecli 目录。
 安装不包含账号、密码、访问授权或自动登录。无需安装整个 easytrader。
 
-## 查询和恢复
+## 账户与持仓
 
-资金和持仓查询要求客户端处于资金股票页面；账户 ID 来自 `accounts list`。
-指定 `--account <id>` 查询其他账户；`snapshots create --accounts <id,id>` 依次读取。
-完成后恢复原账户。持仓读取会改变 Windows 剪贴板和表格选择。
+账户 ID 来自 `accounts list`。`accounts select --account <id>` 切换并保留当前账户；
+查询指定 `--account <id>` 或多账户 `snapshots create --accounts <id,id>` 会在结束后恢复原账户。
 
-遇到验证时返回 `operation_id`；用户手动完成后执行：
+`positions list` 返回私有截图和 `capture_id`，由 Codex 查看完整表格，再调用
+`positions review --capture <id> --input <review.json>` 校验代码、数量、图片哈希和金额对账。
+新持仓读取不复制、不导出表格，避免走复制验证码路径；它不是无人复核的自动结构化接口。
+超出窗口的行不能声明完整。截图识别和对账通过才算持仓读取完成。
+输入格式见配套 Skill。金额、股数和六位代码均使用字符串。
+
+旧版本的未完成复制可用 `operations status/resume <id>` 恢复原请求；
+验证由用户处理，恢复不重新复制。放弃需 `operations abandon <id> --yes`。
+所有命令输出 JSON；失败退出码 2。`schema` 和 `capabilities` 提供当前契约。
+数据代表客户端显示；保留对账警告和恢复失败。标签重复或切换后资金完全相同会报错。
+
+## 模拟买卖
+
+开发版 `0.2.0-dev.4` 提供以下流程，尚未发布到 npm：
 
 ```sh
-tradecli operations status <operation-id> --json
-tradecli operations resume <operation-id> --json
+tradecli orders prepare --side buy --account <id> --code <六位代码> --price <价格> --quantity <股数>
+tradecli orders submit-simulated --draft <draft-id> --account <id>
+tradecli orders confirm-simulated --draft <draft-id> --account <id>
+tradecli orders result --draft <draft-id>
+tradecli orders acknowledge --draft <draft-id> --account <id>
+tradecli orders ledger --account <id>
 ```
 
-恢复读取原请求，不重新发送复制。请求有效期五分钟，账户、进程、窗口和剪贴板
-来源必须匹配。中断记录会阻止新查询；放弃时使用
-`operations abandon <operation-id> --yes`，并人工检查当前界面和账户。
-放弃只改变操作状态，不关闭弹窗或恢复账户。
+`prepare` 只填单并返回截图。提交与确认独立、一次性执行，必须绑定当前模拟账户、
+买卖方向、代码、价格、股数和五分钟内的草稿。用户应先核对预览。
+`acknowledge` 仅关闭与该草稿已记录回执一致的成功提示；`ledger` 打开当日委托供核对。
+结果不明时查询回执和委托，不自动重发。委托受理不等于成交。
+`orders inspect/open/clear/quantity-mode` 分别检查、打开表单、显式清空、切换为股数输入。
+清空使用 `--yes`，只用于用户授权清理的草稿。
+单笔提交命令只接受明确标识为模拟炒股的账户。真实账户仅开放下文的整批默认价格流程。
+没有撤单、密码输入功能。
 
-所有命令输出 JSON；`ok:false` 退出码为 2。`schema` 和 `capabilities` 提供当前契约。
-金额为十进制字符串；证券代码保留前导零。多账户快照为顺序采集。
-数据代表客户端显示，不能证明与券商服务器实时同步。对账警告和恢复失败均会保留。
-标签相同的账户或切换后资金完全相同的情况会保守报错。
+## 模拟批量任务
+
+把 1–15 笔委托写入私有 JSON 文件，格式为
+`{"orders":[{"side":"buy","code":"600001","price":"1.23","quantity":"100"}]}`。
+数量和价格使用字符串；逐笔限价。先验证，再为当前模拟账户准备批次：
+买入代码在同一批次内不能重复；已有持仓的卖出可以拆成多笔。
+
+```sh
+tradecli batches validate --input <orders.json>
+tradecli batches prepare --input <orders.json> --account <模拟账户ID>
+tradecli batches run-simulated --batch <返回的batch_id> --account <模拟账户ID> --digest <返回的digest> --yes
+tradecli batches status --batch <batch_id>
+```
+
+`run-simulated` 在一次 Windows 执行进程内逐笔填单、核对确认框、提交、等待合同编号并清理表单。
+每笔点击前记录状态；回执不明立即停批，后续订单保持未执行，整批不可自动重试。
+成功回执只证明委托受理，不证明成交。执行后用 `orders ledger --account <id>` 核对当日委托。
+详见 [批量执行契约](docs/batch-execution.md)。
+
+若使用同花顺表单自动填入的默认价格，计划只写方向、代码和股数：
+
+```json
+{"orders":[{"side":"buy","code":"600221","quantity":"100"},{"side":"sell","code":"300359","quantity":"100"}]}
+```
+
+先运行 `batches validate-default --input <orders.json>` 和
+`batches prepare-default --input <orders.json> --account <模拟账户ID>`。
+准备阶段校验清单并核对模拟账户；用户只确认账户、买卖方向、代码和股数。
+用户确认后使用同一个 `batches run-simulated` 命令执行。执行时逐笔重新读取
+同花顺默认价格，绑定到该笔确认框；价格可能与预览不同。若默认价格为空、字段变化或
+回执不明，立即停止。真实账户使用 `batches prepare-real-default` 和 `batches run-real`，
+两个命令都会绑定账户类型与账户 ID。执行前通过下面的策略计划流程完成持仓复核和整表确认。
+
+## 策略计划与整批确认
+
+配套 Skill 接受指定账户，默认当前账户，以及逐笔买卖股数或目标持股数。先读取并复核该账户
+全部持仓，再把策略写为私有 JSON 文件，例如：
+
+```json
+{"targets":[{"code":"300359","quantity":"300"},{"code":"600221","name":"海航控股","quantity":"100"}]}
+```
+
+已持有股票的名称来自持仓复核；新买入股票需提供核实过的名称。运行：
+
+```sh
+tradecli batches plan-default --strategy <strategy.json> --review <positions-review.json> --account <账户ID>
+```
+
+返回每笔的代码、名称、当前股数、方向、买卖股数和计划后股数，以及可执行的 `orders_path`。
+Skill 先用表格确认完整清单和账户，再准备并执行匹配的批次。价格在执行时由同花顺填入。
+完成后按合同编号核对当日委托，并区分委托受理、实际成交、结果不明和未尝试的订单。
+计划后股数只有在相应订单成交后才成为实际持股数。真实账户流程已通过自动化单元测试，
+并在真实账户走过一次确认与提交路径；交易端明确拒绝了非受理时段的测试买单，
+未取得合同编号，后续卖单未执行。真实账户成功受理及成交路径尚未实测。
 
 ## 范围与维护
 
-0.1 系列提供账户、资金和持仓查询，无买卖、撤单、新股申购或密码输入命令。
-界面自动操作并不等于模拟资金交易。验证码由用户处理；不承诺无人值守。
 仅提供 Codex Skill；其源文件随 npm 包维护，安装位置为受管理链接。
 `skill source/status/install/update` 查看和管理 Skill；用户已有同名 Skill 会保留并报错。
 `update check` 检查更新；`update install --yes` 更新 npm 包。

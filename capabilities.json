@@ -1,7 +1,7 @@
 {
   "agent": "codex",
   "provider": "ths-desktop",
-  "permission": "read-only",
+  "permission": "queries-and-confirmed-simulated-or-real-batches",
   "commands": [
     "connections discover",
     "config init",
@@ -20,13 +20,38 @@
     "skill install",
     "skill update",
     "update check",
-    "update install"
+    "update install",
+    "accounts select",
+    "positions review",
+    "orders open",
+    "orders inspect",
+    "orders clear",
+    "orders quantity-mode",
+    "orders prepare",
+    "orders submit-simulated",
+    "orders confirm-simulated",
+    "orders acknowledge",
+    "orders result",
+    "orders ledger",
+    "batches validate",
+    "batches validate-default",
+    "batches plan-default",
+    "batches prepare",
+    "batches prepare-default",
+    "batches prepare-real-default",
+    "batches run-simulated",
+    "batches run-real",
+    "batches status"
   ],
   "sideEffects": [
-    "Local private configuration and operation records",
-    "Account selection and restoration",
-    "Holdings table selection and clipboard copy",
-    "Explicit runtime and skill installation"
+    "Private configuration, operation records and screenshots",
+    "Account selection; explicit selections remain active, queries restore the original account",
+    "Buy/sell form edits",
+    "Explicit simulated-account order submission",
+    "Explicit simulated-account batch submission (one Windows worker, up to fifteen orders)",
+    "Explicit real-account default-price batch submission after a reviewed holdings plan and user confirmation",
+    "Legacy copy recovery only",
+    "Explicit runtime and Skill installation"
   ],
   "transports": {
     "parallels": "implemented",
@@ -34,8 +59,10 @@
   },
   "limitations": [
     "Client display freshness, not broker-server verification",
-    "Manual CAPTCHA; cannot promise unattended operation",
+    "Holdings require Codex image review; clipped rows cannot be accepted as complete",
     "Equal fund displays can prevent automatic account switching",
-    "No order submission, cancellation or credential handling"
+    "Individual orders remain simulated-only; real-account execution supports confirmed default-price batches only; cancellation is unavailable",
+    "Real-account batch execution has not yet been live-tested",
+    "Unknown submission outcome must not be retried automatically"
   ]
 }

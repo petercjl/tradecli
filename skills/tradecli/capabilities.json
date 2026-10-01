@@ -12,7 +12,7 @@
       "required_features": [
         "json-output",
         "operation-recovery",
-        "read-only"
+        "no-copy-capture"
       ],
       "input_fields": [
         "command",
@@ -26,13 +26,115 @@
       "side_effects": {
         "external_mutation": true,
         "may_cost_money": false,
-        "authorization": "User requested account query; clipboard and selection only, no orders"
+        "authorization": "User-requested query or account selection; private screenshots, no new table copy"
       },
       "errors": [
         "CAPABILITY_UNAVAILABLE",
         "FEATURE_UNSUPPORTED",
         "USER_VERIFICATION_REQUIRED",
         "OPERATION_PENDING"
+      ]
+    },
+    {
+      "id": "trade.simulated-order",
+      "purpose": "Prepare and submit account-bound simulated orders",
+      "required": true,
+      "required_features": [
+        "draft-readback",
+        "simulation-only",
+        "at-most-once"
+      ],
+      "input_fields": [
+        "account",
+        "side",
+        "code",
+        "price",
+        "quantity"
+      ],
+      "output_fields": [
+        "draft_id",
+        "status",
+        "error"
+      ],
+      "side_effects": {
+        "external_mutation": true,
+        "may_cost_money": false,
+        "authorization": "Explicit user authorization for simulated orders only"
+      },
+      "errors": [
+        "SIMULATED_ACCOUNT_REQUIRED",
+        "ORDER_READBACK_MISMATCH",
+        "ORDER_ALREADY_ATTEMPTED"
+      ]
+    },
+    {
+      "id": "trade.simulated-batch",
+      "purpose": "Execute an authorized simulated order plan in one Windows worker",
+      "required": true,
+      "required_features": ["single-worker", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-plan"],
+      "input_fields": ["account", "orders", "batch_id", "digest"],
+      "output_fields": ["batch_id", "status", "orders", "error"],
+      "side_effects": {
+        "external_mutation": true,
+        "may_cost_money": false,
+        "authorization": "Explicit user authorization for simulated orders only"
+      },
+      "errors": ["SIMULATED_ACCOUNT_REQUIRED", "BATCH_ALREADY_ATTEMPTED", "ORDER_RECEIPT_UNCONFIRMED"]
+    },
+    {
+      "id": "trade.strategy-plan",
+      "purpose": "Calculate exact per-security share changes from reviewed THS holdings and a strategy",
+      "required": true,
+      "required_features": ["review-bound", "account-bound", "before-after-shares", "default-price-orders"],
+      "input_fields": ["account", "review_path", "strategy"],
+      "output_fields": ["rows", "orders_path", "plan_path"],
+      "side_effects": {
+        "external_mutation": false,
+        "may_cost_money": false,
+        "authorization": "Private local plan creation from a user-requested strategy"
+      },
+      "errors": ["HOLDINGS_REVIEW_REQUIRED", "HOLDINGS_REVIEW_STALE", "SELL_EXCEEDS_AVAILABLE", "SECURITY_NAME_REQUIRED"]
+    },
+    {
+      "id": "trade.confirmed-batch",
+      "purpose": "Execute one user-confirmed default-price batch in the bound simulated or real account",
+      "required": true,
+      "required_features": ["single-worker", "real-or-simulated-account-binding", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-table"],
+      "input_fields": ["account", "account_kind", "orders", "batch_id", "digest"],
+      "output_fields": ["batch_id", "status", "orders", "error"],
+      "side_effects": {
+        "external_mutation": true,
+        "may_cost_money": true,
+        "authorization": "Explicit user confirmation of the exact account and complete share-change table"
+      },
+      "errors": ["ORDER_ACCOUNT_MISMATCH", "REAL_ACCOUNT_REQUIRED", "BATCH_ACCOUNT_KIND_MISMATCH", "ORDER_RECEIPT_UNCONFIRMED"]
+    },
+    {
+      "id": "trade.visual-review",
+      "purpose": "Inspect holdings screenshots and create a bound review",
+      "required": true,
+      "required_features": [
+        "local-image-view",
+        "private-json-write"
+      ],
+      "input_fields": [
+        "image_path",
+        "capture_id",
+        "image_sha256"
+      ],
+      "output_fields": [
+        "rows",
+        "complete",
+        "all_rows_visible"
+      ],
+      "side_effects": {
+        "external_mutation": false,
+        "may_cost_money": false,
+        "authorization": "User requested holdings query"
+      },
+      "errors": [
+        "CAPABILITY_UNAVAILABLE",
+        "HOLDINGS_INCOMPLETE"
       ]
     }
   ]

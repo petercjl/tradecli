@@ -9,7 +9,7 @@
       "features": [
         "json-output",
         "operation-recovery",
-        "read-only"
+        "no-copy-capture"
       ],
       "implementation": {
         "kind": "cli",
@@ -20,6 +20,62 @@
           "tradecli schema"
         ],
         "invocation": "Use the host shell execution tool with argument-safe quoting; parse JSON even for exit 2. Preserve the CLI data envelope; map operation_id to task_id when normalizing. No paid actions."
+      }
+    },
+    {
+      "capability_id": "trade.simulated-order",
+      "status": "implemented",
+      "features": [
+        "draft-readback",
+        "simulation-only",
+        "at-most-once"
+      ],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "Use the orders commands documented by tradecli --help. Execute only authorized simulated orders."
+      }
+    },
+    {
+      "capability_id": "trade.simulated-batch",
+      "status": "implemented",
+      "features": ["single-worker", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-plan"],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "Validate and prepare a plan. For default prices use batches validate-default and batches prepare-default. After the user confirms account, directions, codes and quantities, execute batches run-simulated with --yes, batch ID and digest. Inspect status and ledger."
+      }
+    },
+    {
+      "capability_id": "trade.strategy-plan",
+      "status": "implemented",
+      "features": ["review-bound", "account-bound", "before-after-shares", "default-price-orders"],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "After visual holdings review, run batches plan-default with the private strategy file and review_path. Render every returned row as the confirmation table."
+      }
+    },
+    {
+      "capability_id": "trade.confirmed-batch",
+      "status": "implemented",
+      "features": ["single-worker", "real-or-simulated-account-binding", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-table"],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "After explicit confirmation of account and full table, prepare and run the matching simulated or real default-price batch exactly once. Inspect status and current-day ledger. Real-account execution has automated tests but has not been live-tested."
+      }
+    },
+    {
+      "capability_id": "trade.visual-review",
+      "status": "implemented",
+      "features": [
+        "local-image-view",
+        "private-json-write"
+      ],
+      "implementation": {
+        "kind": "native-tool",
+        "invocation": "Use Codex view_image for the returned local image_path, then the host filesystem tool to write a new private JSON review. Validate through tradecli positions review."
       }
     }
   ]

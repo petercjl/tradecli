@@ -45,10 +45,23 @@ export function deploy(c) {
  powershell(c,script);
  return hash;
 }
-export function invoke(c, request) {
+export function invoke(c, request, timeout=120000) {
  const hash=deploy(c);
- const encoded=Buffer.from(JSON.stringify({...request,exe:c.exe,protocol:1})).toString('base64');
- const out=powershell(c,`$python=Join-Path $env:LOCALAPPDATA 'tradecli/venv/Scripts/python.exe'; $worker=Join-Path $env:LOCALAPPDATA 'tradecli/workers/${hash}.py'; & $python $worker '${encoded}'; if($LASTEXITCODE -ne 0){throw 'WORKER_EXIT_FAILED'}`,120000);
+ const payload=Buffer.from(JSON.stringify({...request,exe:c.exe,protocol:1}));
+ const requestHash=crypto.createHash('sha256').update(payload).digest('hex');
+ const cache=path.join(os.homedir(),'.cache','tradecli','requests');
+ fs.mkdirSync(cache,{recursive:true,mode:0o700});
+ fs.chmodSync(cache,0o700);
+ const local=path.join(cache,`${requestHash}.json`);
+ if(fs.existsSync(local)) {
+  if(crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex')!==requestHash)throw new Fault('REQUEST_HASH_MISMATCH');
+ } else fs.writeFileSync(local,payload,{flag:'wx',mode:0o600});
+ fs.chmodSync(local,0o600);
+ const source=c.transport==='parallels'
+  ?(c.sharedHome || '\\\\Mac\\Home')+'\\'+path.relative(os.homedir(),local).split(path.sep).join('\\')
+  :local;
+ const script=`$python=Join-Path $env:LOCALAPPDATA 'tradecli/venv/Scripts/python.exe'; $worker=Join-Path $env:LOCALAPPDATA 'tradecli/workers/${hash}.py'; $request=${quote(source)}; if((Get-FileHash -LiteralPath $request -Algorithm SHA256).Hash.ToLower() -ne '${requestHash}'){throw 'REQUEST_HASH_MISMATCH'}; & $python $worker --request-file $request '${requestHash}'; if($LASTEXITCODE -ne 0){throw 'WORKER_EXIT_FAILED'}`;
+ const out=powershell(c,script,timeout);
  try { const result=JSON.parse(out); if(result.protocol!==1 || typeof result.ok!=='boolean') throw 0; return result; }
  catch {throw new Fault('WORKER_PROTOCOL_INVALID');}
 }
