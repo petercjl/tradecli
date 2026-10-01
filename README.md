@@ -46,7 +46,7 @@ Windows 执行端、独立虚拟环境和私有操作记录保存在用户 LOCAL
 
 ## 模拟买卖
 
-开发版 `0.2.0-dev.2` 提供以下流程，尚未发布到 npm：
+开发版 `0.2.0-dev.3` 提供以下流程，尚未发布到 npm：
 
 ```sh
 tradecli orders prepare --side buy --account <id> --code <六位代码> --price <价格> --quantity <股数>
@@ -74,7 +74,7 @@ tradecli orders ledger --account <id>
 ```sh
 tradecli batches validate --input <orders.json>
 tradecli batches prepare --input <orders.json> --account <模拟账户ID>
-tradecli batches run-simulated --batch <返回的batch_id> --account <模拟账户ID> --digest <返回的digest>
+tradecli batches run-simulated --batch <返回的batch_id> --account <模拟账户ID> --digest <返回的digest> --yes
 tradecli batches status --batch <batch_id>
 ```
 
@@ -82,6 +82,19 @@ tradecli batches status --batch <batch_id>
 每笔点击前记录状态；回执不明立即停批，后续订单保持未执行，整批不可自动重试。
 成功回执只证明委托受理，不证明成交。执行后用 `orders ledger --account <id>` 核对当日委托。
 详见 [批量执行契约](docs/batch-execution.md)。
+
+若使用同花顺表单自动填入的默认价格，计划只写方向、代码和股数：
+
+```json
+{"orders":[{"side":"buy","code":"600221","quantity":"100"},{"side":"sell","code":"300359","quantity":"100"}]}
+```
+
+先运行 `batches validate-default --input <orders.json>` 和
+`batches prepare-default --input <orders.json> --account <模拟账户ID>`。
+准备阶段逐笔读取当前默认价格并清空预览表单；用户只确认账户、买卖方向、代码和股数。
+用户确认后使用同一个 `batches run-simulated` 命令执行。执行时逐笔重新读取
+同花顺默认价格，绑定到该笔确认框；价格可能与预览不同。若默认价格为空、字段变化或
+回执不明，立即停止。此模式目前只允许模拟账户。
 
 ## 范围与维护
 

@@ -1,6 +1,7 @@
 import sys, unittest, tempfile, time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'worker'))
 from ths import Store, dispatch, account_id, ReadOnlyTHS, receipt_contract
@@ -28,6 +29,12 @@ class BatchClient:
     def prepare_order(self,order):
         self.fields={**order,'unit':'shares'}
         return {**self.fields,'captured_at':time.time()}
+    def default_price_order(self,order,preview=False):
+        price='1.24' if preview else '1.25'
+        result={**order,'price':price,'unit':'shares',
+                'price_source':'ths_default_price_field','captured_at':time.time()}
+        if not preview:self.fields=result
+        return result
     def order_fields(self,side):
         return self.fields or {'side':side,'unit':'shares','code':'','price':'','quantity':''}
     def control(self,kind,identity):
@@ -75,7 +82,7 @@ class Batches(unittest.TestCase):
                          'orders':self.orders},self.store,self.factory)
     def run_batch(self,batch):
         return dispatch({'action':'batches.run-simulated','exe':'test','batch':batch['batch_id'],
-                         'account':self.account,'digest':batch['digest']},self.store,self.factory)
+                         'account':self.account,'digest':batch['digest'],'confirmed':True},self.store,self.factory)
     def test_two_orders_one_worker_and_receipts(self):
         batch=self.prepare()
         self.factory_calls=0
@@ -88,6 +95,15 @@ class Batches(unittest.TestCase):
         self.assertTrue(all(r['form_cleared'] for r in result['orders']))
         with self.assertRaisesRegex(RuntimeError,'BATCH_ALREADY_ATTEMPTED'):
             self.run_batch(batch)
+    def test_default_price_is_bound_at_execution(self):
+        self.orders=[{'side':'buy','code':'600001','quantity':'100'}]
+        batch=dispatch({'action':'batches.prepare-default','exe':'test','account':self.account,
+                        'orders':self.orders},self.store,self.factory)
+        self.assertEqual(batch['orders'][0]['default_price_preview'],'1.24')
+        result=self.run_batch(batch)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(result['orders'][0]['order']['price'],'1.25')
+        self.assertEqual(self.client.clicks,1)
     def test_missing_receipt_stops_without_reclick(self):
         batch=self.prepare()
         self.client.fail_at=1
@@ -122,9 +138,12 @@ class Batches(unittest.TestCase):
         batch=self.prepare()
         with self.assertRaisesRegex(RuntimeError,'BATCH_DUPLICATE_PLAN'):
             self.prepare()
+        with self.assertRaisesRegex(RuntimeError,'CONFIRMATION_REQUIRED'):
+            dispatch({'action':'batches.run-simulated','exe':'test','batch':batch['batch_id'],
+                      'account':self.account,'digest':batch['digest']},self.store,self.factory)
         with self.assertRaisesRegex(RuntimeError,'BATCH_EXPIRED_OR_MISMATCH'):
             dispatch({'action':'batches.run-simulated','exe':'test','batch':batch['batch_id'],
-                      'account':self.account,'digest':'0'*64},self.store,self.factory)
+                      'account':self.account,'digest':'0'*64,'confirmed':True},self.store,self.factory)
         self.assertEqual(self.client.clicks,0)
     def test_crashed_run_requires_attention(self):
         batch=self.prepare()
@@ -140,6 +159,31 @@ class Batches(unittest.TestCase):
     def test_receipt_requires_matching_side_and_contract(self):
         self.assertIsNone(receipt_contract({'dialogs':[{'text':'您的卖出委托已成功提交，合同编号：123'}]},'buy'))
         self.assertEqual(receipt_contract({'dialogs':[{'text':'您的买入委托已成功提交，合同编号：123'}]},'buy'),'123')
+    def test_default_execution_never_types_price(self):
+        client=BatchClient()
+        client.fields={'side':'buy','unit':'shares','code':'','price':'','quantity':''}
+        writes=[]
+        class Edit:
+            def __init__(self,key):self.key=key
+            def is_enabled(self):return True
+            def set_focus(self):pass
+            def select(self,start,end):pass
+            def type_keys(self,value,**kwargs):
+                writes.append(self.key)
+                client.fields[self.key]=value
+                if self.key=='code':client.fields['price']='1.23'
+        def control(kind,cid):
+            assert kind=='Edit'
+            key={1032:'code',1033:'price',1034:'quantity'}[cid]
+            if key=='price':raise AssertionError('price field was accessed for writing')
+            return Edit(key)
+        client.control=control
+        client.open_page=lambda side:None
+        with patch('ths.time.sleep',lambda _:None):
+            actual=ReadOnlyTHS.default_price_order(client,{'side':'buy','code':'600221',
+                'quantity':'100','account':self.account})
+        self.assertEqual(actual['price'],'1.23')
+        self.assertEqual(writes,['code','quantity'])
 
 
 if __name__=='__main__':unittest.main()

@@ -13,6 +13,10 @@ test('batch input is exact, ordered and rejects ambiguous orders',()=>{
  try {
   fs.writeFileSync(file,JSON.stringify(good));
   assert.deepEqual(validateBatchFile(file).orders,good.orders);
+  const defaultPlan={orders:[{side:'buy',code:'600001',quantity:'100'}]};
+  fs.writeFileSync(file,JSON.stringify(defaultPlan));
+  assert.deepEqual(validateBatchFile(file,'default').orders,defaultPlan.orders);
+  assert.throws(()=>validateBatchFile(file));
   for(const bad of [
    {...good,account:'unexpected'},
    {orders:[good.orders[0],good.orders[0]]},

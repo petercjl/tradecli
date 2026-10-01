@@ -23,8 +23,10 @@ export const help = `tradecli — Codex THS query and simulated-order CLI
   orders result --draft <id>
   orders ledger --account <id>
   batches validate --input <orders.json>
+  batches validate-default --input <orders.json>
   batches prepare --input <orders.json> --account <id>
-  batches run-simulated --batch <id> --account <id> --digest <sha256>
+  batches prepare-default --input <orders.json> --account <id>
+  batches run-simulated --batch <id> --account <id> --digest <sha256> --yes
   batches status --batch <id>
   funds get [--account <id>]
   positions list [--account <id>]
@@ -64,8 +66,8 @@ const options={
  'orders submit-simulated':['draft','account'], 'orders result':['draft'],
  'orders confirm-simulated':['draft','account'], 'orders acknowledge':['draft','account'],
  'orders ledger':['account'],
- 'batches validate':['input'], 'batches prepare':['input','account'],
- 'batches run-simulated':['batch','account','digest'], 'batches status':['batch'],
+ 'batches validate':['input'], 'batches validate-default':['input'], 'batches prepare':['input','account'], 'batches prepare-default':['input','account'],
+ 'batches run-simulated':['batch','account','digest','yes'], 'batches status':['batch'],
  'funds get':['account'], 'positions list':['account'], 'snapshots create':['accounts'],
  'operations status':[], 'operations resume':[], 'operations abandon':['yes'],
  'skill source':['agent'], 'skill status':['agent'], 'skill install':['agent'], 'skill update':['agent'],
@@ -94,10 +96,11 @@ export function execute(argv) {
   if(!flags.capture||!flags.input)throw new Fault('REVIEW_ARGUMENTS_REQUIRED');
   return reviewCapture(flags.capture,flags.input);
  }
- if(key==='batches validate') {
+ if(key==='batches validate'||key==='batches validate-default') {
   if(!flags.input)throw new Fault('BATCH_INPUT_REQUIRED');
-  const plan=validateBatchFile(flags.input);
-  return {ok:true,status:'validated',orders:plan.orders,count:plan.orders.length};
+  const mode=key==='batches validate-default'?'default':'limit';
+  const plan=validateBatchFile(flags.input,mode);
+  return {ok:true,status:'validated',price_mode:mode,orders:plan.orders,count:plan.orders.length};
  }
  if(args[0]==='update') {
   const latest=JSON.parse(run('npm',['view',pkg.name,'version','--json']));
@@ -114,13 +117,14 @@ export function execute(argv) {
    return invoke(c,{action:'batches.status',batch:flags.batch});
   }
   if(!/^a_[a-f0-9]{16}$/.test(flags.account||''))throw new Fault('ACCOUNT_REQUIRED');
-  if(args[1]==='prepare') {
+  if(args[1]==='prepare'||args[1]==='prepare-default') {
    if(!flags.input)throw new Fault('BATCH_INPUT_REQUIRED');
-   const plan=validateBatchFile(flags.input);
-   return invoke(c,{action:'batches.prepare',account:flags.account,orders:plan.orders});
+   const plan=validateBatchFile(flags.input,args[1]==='prepare-default'?'default':'limit');
+   return invoke(c,{action:`batches.${args[1]}`,account:flags.account,orders:plan.orders});
   }
   if(!/^[a-f0-9-]{36}$/.test(flags.batch||'')|| !/^[a-f0-9]{64}$/.test(flags.digest||''))throw new Fault('BATCH_RUN_ARGUMENTS_INVALID');
-  return invoke(c,{action:'batches.run-simulated',batch:flags.batch,account:flags.account,digest:flags.digest},600000);
+  if(!flags.yes)throw new Fault('CONFIRMATION_REQUIRED');
+  return invoke(c,{action:'batches.run-simulated',batch:flags.batch,account:flags.account,digest:flags.digest,confirmed:true},600000);
  }
  if(args[0]==='orders') {
   if(args[1]==='ledger') {

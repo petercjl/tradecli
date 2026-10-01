@@ -5,6 +5,16 @@
 available funds for buys and returns a batch ID plus SHA-256 digest. Execution
 requires both values and begins within five minutes.
 
+For THS's current form default price, use `batches validate-default` and
+`batches prepare-default` with rows containing only `side`, `code` and `quantity`.
+Preparation reads and previews the default price for each code, then clears its
+form. After the user confirms the whole list, the same `batches run-simulated`
+command re-reads each default price at execution and binds that exact value to
+the confirmation dialog. The execution price can differ from the preview.
+If the client leaves the price empty or changes a field, the batch stops.
+The CLI requires `--yes` on execution after the user confirms the account,
+order directions, stock codes and share quantities.
+
 `batches run-simulated` attaches one Windows worker to the THS desktop and handles
 orders serially. For each row it fills the form, reads back account and fields,
 records `submit_attempted`, clicks once, validates the confirmation dialog,

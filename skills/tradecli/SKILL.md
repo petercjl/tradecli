@@ -154,8 +154,13 @@ by the user. `ORDER_ALREADY_ATTEMPTED` returns to result/ledger inspection only.
 2. Run `batches validate --input <file>`, then `batches prepare --input <file>
    --account <id>`. Compare the returned orders, estimated buy total, available
    funds and account with the authorized plan. Preparation expires in five minutes.
-3. Execute once using `batches run-simulated --batch <batch_id> --account <id>
-   --digest <digest>`. One Windows worker runs the batch serially. Each order is
+   For a user-approved THS default-price plan, omit `price` from every order and
+   use `batches validate-default` plus `batches prepare-default`. Confirm the
+   complete account, side, code and quantity list with the user before running.
+   The CLI retains default-price previews for diagnostics; execution re-reads the
+   client's default price for each order without typing a price.
+3. After explicit user confirmation, execute once using `batches run-simulated
+   --batch <batch_id> --account <id> --digest <digest> --yes`. One Windows worker runs the batch serially. Each order is
    saved before submit and confirmation, matched to its confirmation dialog,
    then polled for an explicit success receipt with contract number. A recognized
    receipt is acknowledged before the next order.

@@ -39,11 +39,11 @@
     {
       "capability_id": "trade.simulated-batch",
       "status": "implemented",
-      "features": ["single-worker", "receipt-polling", "stop-on-uncertainty"],
+      "features": ["single-worker", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-plan"],
       "implementation": {
         "kind": "cli",
         "command": "tradecli",
-        "invocation": "Validate and prepare an authorized plan, then execute batches run-simulated with the returned batch ID and digest. Inspect status and ledger after execution."
+        "invocation": "Validate and prepare a plan. For default prices use batches validate-default and batches prepare-default. After the user confirms account, directions, codes and quantities, execute batches run-simulated with --yes, batch ID and digest. Inspect status and ledger."
       }
     },
     {

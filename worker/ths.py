@@ -231,6 +231,55 @@ class ReadOnlyTHS:
                     status="prepared_for_manual_submission", captured_at=time.time(),
                     image_base64=base64.b64encode(capture_window_png(self.window.handle)).decode("ascii"))
 
+    def default_price_order(self, request, preview=False):
+        """Read THS's own price after entering a code; optionally fill shares."""
+        side, code, account = (request[key] for key in ("side", "code", "account"))
+        self.assert_simulated(account)
+        self.open_page(side)
+        fields = self.order_fields(side)
+        if any(fields[key] for key in ("code", "price", "quantity")):
+            raise RuntimeError("FORM_DRAFT_PRESENT")
+        if fields["unit"] != "shares":
+            raise RuntimeError("ORDER_QUANTITY_MODE_REQUIRED")
+        code_control = self.control("Edit", 1032)
+        if not code_control.is_enabled():
+            raise RuntimeError("ORDER_FIELD_DISABLED")
+        type_numeric_edit(code_control, code)
+        time.sleep(2.0)
+        self.assert_simulated(account)
+        fields = self.order_fields(side)
+        if fields["code"] != code or fields["quantity"]:
+            raise RuntimeError("ORDER_DEFAULT_PRICE_UNAVAILABLE")
+        price = fields["price"]
+        if not isinstance(price, str) or not re.fullmatch(r"[0-9]{1,6}(?:\.[0-9]{1,3})?", price) or Decimal(price) <= 0:
+            raise RuntimeError("ORDER_DEFAULT_PRICE_UNAVAILABLE")
+        if preview:
+            result = {"side":side,"code":code,"price":price,
+                      "quantity":request["quantity"],"account":account,
+                      "price_source":"ths_default_price_field","captured_at":time.time()}
+            for cid in (1034, 1033, 1032):
+                self.control("Edit", cid).type_keys("^a{BACKSPACE}", set_foreground=True)
+            deadline = time.monotonic()+2
+            while True:
+                cleared = self.order_fields(side)
+                if not any(cleared[key] for key in ("code","price","quantity")):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("ORDER_CLEAR_FAILED")
+                time.sleep(0.2)
+            return result
+        quantity_control = self.control("Edit", 1034)
+        if not quantity_control.is_enabled():
+            raise RuntimeError("ORDER_FIELD_DISABLED")
+        type_numeric_edit(quantity_control, request["quantity"])
+        time.sleep(0.3)
+        order = dict(request, price=price)
+        validate_order(order)
+        if not order_fields_match(self.order_fields(side), order):
+            raise RuntimeError("ORDER_READBACK_MISMATCH")
+        return dict(order, unit="shares", price_source="ths_default_price_field",
+                    captured_at=time.time())
+
     def assert_simulated(self, expected):
         current = self.accounts()["current_account"]
         if not current.startswith("模拟炒股-") or account_id(current) != expected:
@@ -522,6 +571,26 @@ def validate_batch_orders(orders, account):
     return result
 
 
+def validate_default_batch_orders(orders, account):
+    if not isinstance(orders, list) or not 1 <= len(orders) <= 10:
+        raise RuntimeError("BATCH_SIZE_INVALID")
+    if not isinstance(account, str) or not re.fullmatch(r"a_[a-f0-9]{16}", account):
+        raise RuntimeError("ACCOUNT_REQUIRED")
+    result, seen = [], set()
+    for row in orders:
+        if not isinstance(row, dict) or set(row) != {"side","code","quantity"}:
+            raise RuntimeError("BATCH_ORDER_SCHEMA_INVALID")
+        if row["side"] not in ("buy","sell") or not isinstance(row["code"],str) or not re.fullmatch(r"[0-9]{6}",row["code"]):
+            raise RuntimeError("BATCH_ORDER_INVALID")
+        if not isinstance(row["quantity"],str) or not re.fullmatch(r"[1-9][0-9]{0,8}",row["quantity"]):
+            raise RuntimeError("BATCH_ORDER_INVALID")
+        if row["code"] in seen:
+            raise RuntimeError("BATCH_DUPLICATE_SECURITY")
+        seen.add(row["code"])
+        result.append(dict(row,account=account))
+    return result
+
+
 def batch_digest(account, orders):
     return hashlib.sha256(json.dumps({"account":account,"orders":orders},
                        ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -574,7 +643,9 @@ class Store:
     def find_batch_digest(self, digest):
         for row in self.db.execute("SELECT data FROM operations"):
             item = json.loads(row[0])
-            if item.get("kind") == "batch" and item.get("digest") == digest:
+            if (item.get("kind") == "batch" and item.get("digest") == digest
+                    and (item.get("status") in ("running", "needs_attention")
+                         or time.time()-item.get("requested_at",0)<300)):
                 return item
         return None
 
@@ -587,7 +658,7 @@ class Store:
 def batch_result(batch):
     return {"ok":batch["status"] in ("prepared", "completed"),
             "batch_id":batch["id"], "digest":batch["digest"],
-            "account":batch["account"], "status":batch["status"],
+            "account":batch["account"], "mode":batch.get("mode","limit"), "status":batch["status"],
             "error":batch.get("error"), "orders":batch["orders"],
             "estimated_buy_total":batch["estimated_buy_total"],
             "available_before":batch["available_before"],
@@ -640,7 +711,11 @@ def execute_batch(client, store, batch):
             client.assert_simulated(batch["account"])
             if entry["status"] != "queued":
                 raise RuntimeError("BATCH_ORDER_ALREADY_ATTEMPTED")
-            prepared=client.prepare_order(order)
+            if batch.get("mode") == "default_price":
+                prepared=client.default_price_order(order)
+                order["price"]=prepared["price"]
+            else:
+                prepared=client.prepare_order(order)
             entry["status"]="prepared"
             entry["preview"]={k:prepared[k] for k in ("side","unit","code","price","quantity","captured_at")}
             store.save(batch)
@@ -778,7 +853,7 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         except Exception as exc:
             return {**result_for(op),"ok":False,"error":safe_error(exc)}
         return execute_operation(client,store,op,True)
-    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.run-simulated", "funds", "positions", "snapshot", "doctor"):
+    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.prepare-default", "batches.run-simulated", "funds", "positions", "snapshot", "doctor"):
         raise RuntimeError("COMMAND_UNSUPPORTED")
     pending=store.pending()
     if pending:
@@ -792,28 +867,37 @@ def dispatch(request, store, factory=ReadOnlyTHS):
                 "interactive_session":os.environ.get("SESSIONNAME","unknown"),
                 "simulated_orders_only":True}
     if action == "accounts": return {"ok":True,**public_accounts(client.accounts())}
-    if action == "batches.prepare":
+    if action in ("batches.prepare", "batches.prepare-default"):
         account=request.get("account")
-        orders=validate_batch_orders(request.get("orders"),account)
+        use_default=action=="batches.prepare-default"
+        orders=(validate_default_batch_orders if use_default else validate_batch_orders)(request.get("orders"),account)
         if account_id(client.accounts()["current_account"])!=account:
             raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
         client.assert_simulated(account)
         client.open_page("holdings")
         funds=client.funds()["funds"]
-        total=sum((Decimal(o["price"])*int(o["quantity"]) for o in orders if o["side"]=="buy"),Decimal("0"))
+        previews=[client.default_price_order(o,preview=True) for o in orders] if use_default else []
+        total=sum((Decimal((previews[i] if use_default else o)["price"])*int(o["quantity"])
+                   for i,o in enumerate(orders) if o["side"]=="buy"),Decimal("0"))
         reserve=Decimal(5)*sum(o["side"]=="buy" for o in orders)
         if total+reserve>Decimal(funds["可用金额"]):
             raise RuntimeError("BATCH_FUNDS_INSUFFICIENT")
-        digest=batch_digest(account,orders)
+        digest=batch_digest(account,[{"mode":"default_price" if use_default else "limit"},*orders])
         if store.find_batch_digest(digest):
             raise RuntimeError("BATCH_DUPLICATE_PLAN")
         batch={"id":str(uuid.uuid4()),"kind":"batch","exe":request["exe"],"account":account,
+               "mode":"default_price" if use_default else "limit",
                "digest":digest,"status":"prepared","requested_at":time.time(),
                "estimated_buy_total":str(total),"available_before":funds["可用金额"],
-               "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
+               "orders":[{"index":i,"order":o,"status":"queued",
+                          **({"default_price_preview":previews[i]["price"],
+                              "price_source":previews[i]["price_source"]} if use_default else {})}
+                         for i,o in enumerate(orders)]}
         store.save(batch)
         return batch_result(batch)
     if action == "batches.run-simulated":
+        if request.get("confirmed") is not True:
+            raise RuntimeError("CONFIRMATION_REQUIRED")
         batch=store.get(request.get("batch", ""))
         if batch.get("kind")!="batch" or batch["exe"]!=request["exe"]:
             raise RuntimeError("BATCH_INVALID")

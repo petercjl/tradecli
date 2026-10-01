@@ -34,7 +34,9 @@
     "orders result",
     "orders ledger",
     "batches validate",
+    "batches validate-default",
     "batches prepare",
+    "batches prepare-default",
     "batches run-simulated",
     "batches status"
   ],

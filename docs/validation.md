@@ -96,3 +96,21 @@ interrupted state, and automatic client form clearing. The prior no-receipt
 case was not repeated; its underlying cause is still unknown. The new polling
 path recovered receipts in this small sample and preserves uncertain outcomes
 without retry.
+
+## Client-default-price batch (2026-10-01)
+
+Unreleased 0.2.0-dev.3 adds `batches validate-default` and
+`batches prepare-default`. An authorized three-order simulated test used the
+client's automatically filled price field: buy 600221 for 100 shares, buy
+600010 for 100 shares, and sell 300359 for 100 shares. No price was typed by
+the worker. The confirmation dialogs identified the two buy prices as 卖一 and
+the sell price as 买一. One Windows worker submitted and confirmed all three in
+about 17 seconds. Each receipt contract appeared in the refreshed current-day
+ledger with matching side, code, quantity and limit price; all had zero filled
+at inspection. The preview logic initially saw a transient nonblank field after
+clearing a sell quote; a bounded wait fixed it before submission testing.
+
+The final CLI requires a user-confirmed plan plus `--yes` at execution. Unit
+tests verify that default-price execution types only the code and quantity,
+and that a missing confirmation flag prevents dispatch. This is a small
+simulated-client sample, not a guarantee that prices or fills remain unchanged.
