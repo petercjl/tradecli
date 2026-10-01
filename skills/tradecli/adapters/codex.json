@@ -47,6 +47,26 @@
       }
     },
     {
+      "capability_id": "trade.strategy-plan",
+      "status": "implemented",
+      "features": ["review-bound", "account-bound", "before-after-shares", "default-price-orders"],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "After visual holdings review, run batches plan-default with the private strategy file and review_path. Render every returned row as the confirmation table."
+      }
+    },
+    {
+      "capability_id": "trade.confirmed-batch",
+      "status": "implemented",
+      "features": ["single-worker", "real-or-simulated-account-binding", "receipt-polling", "stop-on-uncertainty", "client-default-price", "user-confirmed-table"],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "invocation": "After explicit confirmation of account and full table, prepare and run the matching simulated or real default-price batch exactly once. Inspect status and current-day ledger. Real-account execution has automated tests but has not been live-tested."
+      }
+    },
+    {
       "capability_id": "trade.visual-review",
       "status": "implemented",
       "features": [

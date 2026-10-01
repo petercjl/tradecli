@@ -1,6 +1,6 @@
 ---
 name: tradecli
-description: Use tradecli to switch THS accounts, review holdings images, and run account-bound individual or batch orders in simulated accounts from Codex.
+description: Use tradecli in Codex to query THS accounts, turn a buy/sell strategy into a holdings-change confirmation table, execute a confirmed simulated or real-account batch, and reconcile orders.
 ---
 
 # tradecli
@@ -10,13 +10,15 @@ The CLI and bundled Windows worker are the execution source of truth.
 
 ## Input → strategy → output
 
-Input: a query or simulated-order intent, account ID, and for orders side, code, price and shares. Default queries to the current account;
-use multiple accounts only when the user requests that scope.
-Strategy: inspect capabilities and readiness, resolve accounts, query serially,
-handle operation states, check attribution and reconciliation.
-Output: account-bound funds/holdings with acquisition time, displayed-data
-freshness, warnings, operation ID and restoration state. Never infer server
-freshness or a completed query from an incomplete operation.
+Input: a query or trading strategy, with an optional account (default: the currently
+selected THS account). A trading strategy can specify per-security buy/sell shares
+or target holdings; resolve ambiguous quantities before planning.
+Strategy: inspect readiness, bind one account, review fresh holdings, calculate
+an exact share-change table, obtain confirmation of that table, execute the
+account-specific batch once, then reconcile contracts and fills.
+Output: account-bound query data or a per-order batch report. Distinguish the
+planned post-trade shares from actual holdings and distinguish accepted orders
+from filled orders. Never infer a successful submission from an incomplete receipt.
 
 ## Main line
 
@@ -62,8 +64,9 @@ freshness or a completed query from an incomplete operation.
   `operations abandon <id> --yes` records abandonment and releases the query gate;
   it does not dismiss a dialog or restore the account. Use only when the user
   chooses to abandon that operation, then return to step 2.
-- Unsupported capability: terminate with `FEATURE_UNSUPPORTED`. There is no
-  real-order submission, cancellation or login implementation.
+- Unsupported capability: terminate with `FEATURE_UNSUPPORTED`. Real-account
+  orders use confirmed default-price batches; individual real-order submission,
+  cancellation and login are not implemented.
 
 ## On-demand knowledge
 
@@ -146,7 +149,96 @@ Return to step 5; use the interpretation knowledge route for disagreement.
 preserve user-owned drafts and do not dismiss unknown dialogs. CAPTCHA is completed
 by the user. `ORDER_ALREADY_ATTEMPTED` returns to result/ledger inspection only.
 
-## Simulated batch branch → step 6
+## Strategy-to-batch branch → step 6
+
+Use this branch when the user supplies a buy/sell list, target holdings, or a
+portfolio adjustment strategy. It applies to simulated and real accounts.
+
+1. Run `accounts list` and bind exactly one account. If none is specified, use its
+   `account_id` for the currently selected account. A masked label is an identity
+   aid, not proof of account type. Select a different account only when requested.
+   Verify whether the bound account is simulated or real from the current THS
+   account label; state the type prominently in the confirmation.
+2. Obtain fresh holdings through `positions list --account <id>` and complete the
+   visual holdings branch, including `positions review`. Use its `review_path`.
+   If the user gives a general strategy, convert it to concrete six-digit codes
+   and integer share quantities. Resolve missing stock names from a reliable,
+   current source and verify held names against the reviewed holdings. A code
+   without a verified name cannot enter the confirmation table. If the strategy
+   uses weights, budgets, or phrases that do not determine exact share counts,
+   resolve them before planning. The plan changes only named securities; other
+   holdings stay as they are.
+3. Write a private strategy JSON outside the package. Choose one form:
+
+   ```json
+   {"orders":[{"code":"600221","name":"海航控股","side":"buy","quantity":"100"}]}
+   ```
+
+   ```json
+   {"targets":[{"code":"300359","quantity":"300"},{"code":"600221","name":"海航控股","quantity":"100"}]}
+   ```
+
+   Held-stock names come from the holdings review and may be omitted. In
+   `orders`, repeated sell rows are allowed; each row's current shares are the
+   shares immediately before that row in plan order. Run `batches plan-default
+   --strategy <file> --review <review_path> --account <id>`. This command rejects
+   stale or inconsistent holdings, account/name mismatches, unavailable sell
+   shares, empty target changes, and invalid batches. It returns `orders_path`,
+   `plan_path`, and rows with before and planned-after quantities. Client default
+   prices are used during execution; the strategy does not contain prices.
+4. Show the user the account label/type and a table with these columns in order:
+   **序号、股票代码、股票名称、当前持股数、方向、买卖股数、操作后持股数**.
+   Include all rows in execution order. The last column is the planned holding
+   count after that row's order fills, not a guarantee of execution. Ask for one
+   explicit confirmation of this account and complete table. A changed strategy,
+   account, holdings, or row order requires a new plan and confirmation. Do not
+   treat `--yes` as a substitute for the user's confirmation.
+5. After confirmation, use `batches prepare-default --input <orders_path>
+   --account <id>` for a simulated account, or `batches prepare-real-default`
+   for a real account. Compare its returned account, order sequence, quantities,
+   mode, and digest with the confirmed plan. Preparation expires in five minutes.
+   Ensure THS has the bound account selected. Run the matching `batches
+   run-simulated` or `batches run-real --batch <id> --account <id> --digest
+   <digest> --yes` once. The Windows worker submits orders serially, checks the
+   default price and full THS confirmation for each, and stops on an unexpected
+   dialog, account change, or unknown receipt. It never retries an attempted row.
+6. Run `batches status --batch <id>`, then `orders ledger --account <id>` and
+   visually match every accepted contract number to code, side, quantity, and
+   status in the same account. If the ledger is clipped, ambiguous, or blocked,
+   report verification as incomplete. Report every planned row as accepted,
+   rejected, unknown, or unattempted, with contract number and actual fill count
+   when verified. Compute actual post-batch holdings only from refreshed reviewed
+   holdings or verified fills; label unfilled orders as pending. If a row is
+   `unknown` or the batch needs attention, report the last verified contract and
+   remaining unattempted rows. The final output has an account/batch summary and
+   a row table with **序号、代码、名称、方向、委托股数、合同编号、委托状态、已成交股数、实际持股数**.
+   Use `待核实` when fills or actual holdings cannot be independently verified.
+   Never rerun or replace uncertain orders. Return to step 6 of the main line.
+
+If a batch stops with `FORM_DRAFT_PRESENT` while every row is still `queued`,
+no order in that batch was submitted. Inspect the currently visible form with
+`orders inspect` and identify its owner. For a draft created by this task,
+check the current-day ledger first, then use `orders clear --side <side>
+--account <id> --yes` and verify all fields are blank. A prior row with no
+receipt remains `unknown` even if the ledger has no matching entry; never
+resubmit it. Once the form is blank, a batch with zero attempted rows may be
+prepared again from the same confirmed plan while the account and holdings
+evidence remain current. Any batch with an attempted row stays terminal and
+requires a newly confirmed plan for different, unattempted orders. Return to
+step 5 of this branch.
+
+For real accounts, the confirmation table is authorization for this exact batch
+only. Read-only planning and preparation do not authorize another batch. The
+worker checks the real-account identity immediately before and during every
+order. Any verification prompt is handled manually by the user; stop rather than
+clicking through it. The Codex Skill and CLI may be tested on macOS with a
+Parallels Windows client. A real-account order attempt has exercised the
+confirmation path and was rejected by THS before acceptance; a successful
+funded-account acceptance and fill remain untested. If THS shows a later
+rejection outside the worker's receipt window, report that client evidence
+alongside the batch's `unknown` state and leave subsequent rows unattempted.
+
+## Legacy simulated batch branch → step 6
 
 1. Resolve the intended simulated account from `accounts list`. Accept an authorized
    plan of 1–15 orders with side, six-digit code, limit price and shares.
@@ -156,11 +248,8 @@ by the user. `ORDER_ALREADY_ATTEMPTED` returns to result/ledger inspection only.
 2. Run `batches validate --input <file>`, then `batches prepare --input <file>
    --account <id>`. Compare the returned orders, estimated buy total, available
    funds and account with the authorized plan. Preparation expires in five minutes.
-   For a user-approved THS default-price plan, omit `price` from every order and
-   use `batches validate-default` plus `batches prepare-default`. Confirm the
-   complete account, side, code and quantity list with the user before running.
-   Preparation validates the list without entering order forms. Execution reads
-   the client's default price for each order without typing a price.
+   Confirm the complete account, side, code, price and quantity list with the
+   user before running.
 3. After explicit user confirmation, execute once using `batches run-simulated
    --batch <batch_id> --account <id> --digest <digest> --yes`. One Windows worker runs the batch serially. Each order is
    saved before submit and confirmation, matched to its confirmation dialog,
@@ -172,5 +261,5 @@ by the user. `ORDER_ALREADY_ATTEMPTED` returns to result/ledger inspection only.
    last confirmed contract and unattempted rows. Do not rerun or replace uncertain
    orders. Return to step 6 of the main line.
 
-Batch commands submit only in a currently selected simulated account. A real
-account, changed form, verification dialog or unexpected response stops execution.
+This legacy branch remains for explicitly priced simulated tests. Use the
+strategy-to-batch branch for default-price strategies on either account type.

@@ -6,6 +6,7 @@ from ths import Store,dispatch,account_id,ReadOnlyTHS,validate_order,validate_co
 
 class Sim:
     assert_simulated=ReadOnlyTHS.assert_simulated
+    assert_trading_account=ReadOnlyTHS.assert_trading_account
     def __init__(self):
         self.label='模拟炒股-TEST';self.clicks=0
         self.fields={'unit':'shares','side':'buy','code':'002051','price':'8.740','quantity':'100'}

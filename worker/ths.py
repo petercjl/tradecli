@@ -234,7 +234,7 @@ class ReadOnlyTHS:
     def default_price_order(self, request, preview=False):
         """Read THS's own price after entering a code; optionally fill shares."""
         side, code, account = (request[key] for key in ("side", "code", "account"))
-        self.assert_simulated(account)
+        self.assert_trading_account(account, request.get("account_kind", "simulated"))
         self.open_page(side)
         fields = self.order_fields(side)
         if any(fields[key] for key in ("code", "price", "quantity")):
@@ -246,7 +246,7 @@ class ReadOnlyTHS:
             raise RuntimeError("ORDER_FIELD_DISABLED")
         type_numeric_edit(code_control, code)
         time.sleep(2.0)
-        self.assert_simulated(account)
+        self.assert_trading_account(account, request.get("account_kind", "simulated"))
         fields = self.order_fields(side)
         if fields["code"] != code or fields["quantity"]:
             raise RuntimeError("ORDER_DEFAULT_PRICE_UNAVAILABLE")
@@ -285,6 +285,19 @@ class ReadOnlyTHS:
         if not current.startswith("模拟炒股-") or account_id(current) != expected:
             raise RuntimeError("SIMULATED_ACCOUNT_REQUIRED")
 
+    def assert_trading_account(self, expected, kind):
+        current = self.accounts()["current_account"]
+        if account_id(current) != expected:
+            raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+        if kind == "simulated":
+            if not current.startswith("模拟炒股-"):
+                raise RuntimeError("SIMULATED_ACCOUNT_REQUIRED")
+        elif kind == "real":
+            if current.startswith("模拟炒股-"):
+                raise RuntimeError("REAL_ACCOUNT_REQUIRED")
+        else:
+            raise RuntimeError("ACCOUNT_KIND_INVALID")
+
     def order_response(self):
         dialogs = []
         for window in self.app.windows(visible_only=True):
@@ -303,7 +316,7 @@ class ReadOnlyTHS:
         return {"status":"dialog_review_required" if dialogs else "submission_unconfirmed", "dialogs":dialogs}
 
     def confirmation_window(self, order):
-        self.assert_simulated(order["account"])
+        self.assert_trading_account(order["account"], order.get("account_kind", "simulated"))
         label = self.accounts()["current_account"]
         candidates=[]
         for window in self.app.windows(visible_only=True):
@@ -322,7 +335,7 @@ class ReadOnlyTHS:
 
     def confirm_order(self, order, before_send):
         modal = self.confirmation_window(order)
-        self.assert_simulated(order["account"])
+        self.assert_trading_account(order["account"], order.get("account_kind", "simulated"))
         trace = [{"event":"confirmation_matched", "handle":modal.handle,
                   "at":time.time()}]
         before_send()
@@ -643,6 +656,11 @@ class Store:
     def find_batch_digest(self, digest):
         for row in self.db.execute("SELECT data FROM operations"):
             item = json.loads(row[0])
+            # A failed run with every row still queued never reached submit.
+            # Its form may need manual cleanup, but it cannot duplicate an order.
+            if (item.get("kind") == "batch" and item.get("status") == "needs_attention"
+                    and all(entry.get("status") == "queued" for entry in item.get("orders", []))):
+                continue
             if (item.get("kind") == "batch" and item.get("digest") == digest
                     and (item.get("status") in ("running", "needs_attention")
                          or time.time()-item.get("requested_at",0)<300)):
@@ -658,7 +676,8 @@ class Store:
 def batch_result(batch):
     return {"ok":batch["status"] in ("prepared", "completed"),
             "batch_id":batch["id"], "digest":batch["digest"],
-            "account":batch["account"], "mode":batch.get("mode","limit"), "status":batch["status"],
+            "account":batch["account"], "account_kind":batch.get("account_kind","simulated"),
+            "mode":batch.get("mode","limit"), "status":batch["status"],
             "error":batch.get("error"), "orders":batch["orders"],
             "estimated_buy_total":batch["estimated_buy_total"],
             "available_before":batch["available_before"],
@@ -683,12 +702,12 @@ def acknowledge_batch_receipt(client, order, response):
                        and c.control_id()==2 and c.is_visible() and c.window_text()=="确定")
     if len(matches)!=1:
         raise RuntimeError("ORDER_RECEIPT_MISMATCH")
-    client.assert_simulated(order["account"])
+    client.assert_trading_account(order["account"], order.get("account_kind", "simulated"))
     matches[0].click()
 
 
 def clear_batch_form(client, order):
-    client.assert_simulated(order["account"])
+    client.assert_trading_account(order["account"], order.get("account_kind", "simulated"))
     fields=client.order_fields(order["side"])
     if not any(fields[key] for key in ("code","price","quantity")):
         return
@@ -708,7 +727,7 @@ def execute_batch(client, store, batch):
     for entry in batch["orders"]:
         order=entry["order"]
         try:
-            client.assert_simulated(batch["account"])
+            client.assert_trading_account(batch["account"], batch.get("account_kind", "simulated"))
             if entry["status"] != "queued":
                 raise RuntimeError("BATCH_ORDER_ALREADY_ATTEMPTED")
             if batch.get("mode") == "default_price":
@@ -721,7 +740,7 @@ def execute_batch(client, store, batch):
             store.save(batch)
             if not order_fields_match(client.order_fields(order["side"]),order):
                 raise RuntimeError("ORDER_READBACK_MISMATCH")
-            client.assert_simulated(batch["account"])
+            client.assert_trading_account(batch["account"], batch.get("account_kind", "simulated"))
             entry["status"]="submit_attempted"
             store.save(batch)
             client.control("Button",1006).click()
@@ -853,23 +872,28 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         except Exception as exc:
             return {**result_for(op),"ok":False,"error":safe_error(exc)}
         return execute_operation(client,store,op,True)
-    if action == "batches.prepare-default":
+    if action in ("batches.prepare-default", "batches.prepare-real-default"):
         pending=store.pending()
         if pending:
             return {"ok":False,"error":"OPERATION_PENDING","operation_id":pending[0]["id"]}
         account=request.get("account")
         orders=validate_default_batch_orders(request.get("orders"),account)
-        digest=batch_digest(account,[{"mode":"default_price"},*orders])
+        kind="real" if action == "batches.prepare-real-default" else "simulated"
+        if kind == "real":
+            client=factory(request["exe"])
+            client.assert_trading_account(account,kind)
+        orders=[dict(order,account_kind=kind) for order in orders]
+        digest=batch_digest(account,[{"mode":"default_price","account_kind":kind},*orders])
         if store.find_batch_digest(digest):
             raise RuntimeError("BATCH_DUPLICATE_PLAN")
         batch={"id":str(uuid.uuid4()),"kind":"batch","exe":request["exe"],
-               "account":account,"mode":"default_price","digest":digest,
+               "account":account,"mode":"default_price","account_kind":kind,"digest":digest,
                "status":"prepared","requested_at":time.time(),
                "estimated_buy_total":None,"available_before":None,
                "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
         store.save(batch)
         return batch_result(batch)
-    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.run-simulated", "funds", "positions", "snapshot", "doctor"):
+    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.run-simulated", "batches.run-real", "funds", "positions", "snapshot", "doctor"):
         raise RuntimeError("COMMAND_UNSUPPORTED")
     pending=store.pending()
     if pending:
@@ -881,7 +905,7 @@ def dispatch(request, store, factory=ReadOnlyTHS):
     if action == "doctor":
         return {"ok":True,"attached":True,"account_count":len(client.accounts()["accounts"]),
                 "interactive_session":os.environ.get("SESSIONNAME","unknown"),
-                "simulated_orders_only":True}
+                "simulated_orders_only":False,"real_default_price_batches":True}
     if action == "accounts": return {"ok":True,**public_accounts(client.accounts())}
     if action == "batches.prepare":
         account=request.get("account")
@@ -907,7 +931,7 @@ def dispatch(request, store, factory=ReadOnlyTHS):
                "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
         store.save(batch)
         return batch_result(batch)
-    if action == "batches.run-simulated":
+    if action in ("batches.run-simulated", "batches.run-real"):
         if request.get("confirmed") is not True:
             raise RuntimeError("CONFIRMATION_REQUIRED")
         batch=store.get(request.get("batch", ""))
@@ -918,7 +942,10 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         if (request.get("account")!=batch["account"] or request.get("digest")!=batch["digest"]
                 or not 0<=time.time()-batch["requested_at"]<=300):
             raise RuntimeError("BATCH_EXPIRED_OR_MISMATCH")
-        client.assert_simulated(batch["account"])
+        kind="real" if action == "batches.run-real" else "simulated"
+        if batch.get("account_kind","simulated") != kind:
+            raise RuntimeError("BATCH_ACCOUNT_KIND_MISMATCH")
+        client.assert_trading_account(batch["account"],kind)
         return execute_batch(client,store,batch)
     if action.startswith("orders."):
         if action in ("orders.submit-simulated", "orders.confirm-simulated", "orders.result", "orders.acknowledge"):

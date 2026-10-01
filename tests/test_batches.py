@@ -9,6 +9,7 @@ from ths import Store, dispatch, account_id, ReadOnlyTHS, receipt_contract, deco
 
 class BatchClient:
     assert_simulated=ReadOnlyTHS.assert_simulated
+    assert_trading_account=ReadOnlyTHS.assert_trading_account
     def __init__(self):
         self.label='模拟炒股-TEST'
         self.clicks=0
@@ -139,7 +140,7 @@ class Batches(unittest.TestCase):
     def test_real_account_never_clicks(self):
         batch=self.prepare()
         self.client.label='真实账户-TEST'
-        with self.assertRaisesRegex(RuntimeError,'SIMULATED_ACCOUNT_REQUIRED'):
+        with self.assertRaisesRegex(RuntimeError,'ORDER_ACCOUNT_MISMATCH'):
             self.run_batch(batch)
         self.assertEqual(self.client.clicks,0)
     def test_real_account_cannot_prepare(self):
@@ -147,6 +148,28 @@ class Batches(unittest.TestCase):
         self.account=account_id(self.client.label)
         with self.assertRaisesRegex(RuntimeError,'SIMULATED_ACCOUNT_REQUIRED'):
             self.prepare()
+        self.assertEqual(self.client.clicks,0)
+    def test_real_default_batch_requires_matching_account_kind_and_executes_once(self):
+        self.client.label='真实账户-TEST'
+        self.account=account_id(self.client.label)
+        self.orders=[{'side':'buy','code':'600001','quantity':'100'}]
+        batch=dispatch({'action':'batches.prepare-real-default','exe':'test','account':self.account,
+                        'orders':self.orders},self.store,self.factory)
+        self.assertEqual(batch['status'],'prepared')
+        with self.assertRaisesRegex(RuntimeError,'BATCH_ACCOUNT_KIND_MISMATCH'):
+            self.run_batch(batch)
+        result=dispatch({'action':'batches.run-real','exe':'test','batch':batch['batch_id'],
+                         'account':self.account,'digest':batch['digest'],'confirmed':True},self.store,self.factory)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(result['orders'][0]['contract_no'],'1001')
+        with self.assertRaisesRegex(RuntimeError,'BATCH_ALREADY_ATTEMPTED'):
+            dispatch({'action':'batches.run-real','exe':'test','batch':batch['batch_id'],
+                      'account':self.account,'digest':batch['digest'],'confirmed':True},self.store,self.factory)
+    def test_simulated_account_cannot_run_real_batch(self):
+        batch=self.prepare()
+        with self.assertRaisesRegex(RuntimeError,'BATCH_ACCOUNT_KIND_MISMATCH'):
+            dispatch({'action':'batches.run-real','exe':'test','batch':batch['batch_id'],
+                      'account':self.account,'digest':batch['digest'],'confirmed':True},self.store,self.factory)
         self.assertEqual(self.client.clicks,0)
     def test_wrong_digest_and_duplicate_plan(self):
         batch=self.prepare()
@@ -158,6 +181,15 @@ class Batches(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'BATCH_EXPIRED_OR_MISMATCH'):
             dispatch({'action':'batches.run-simulated','exe':'test','batch':batch['batch_id'],
                       'account':self.account,'digest':'0'*64,'confirmed':True},self.store,self.factory)
+        self.assertEqual(self.client.clicks,0)
+    def test_zero_attempt_batch_can_be_prepared_again_after_form_cleanup(self):
+        batch=self.prepare()
+        stored=self.store.get(batch['batch_id'])
+        stored.update(status='needs_attention',error='FORM_DRAFT_PRESENT')
+        self.store.save(stored)
+        replacement=self.prepare()
+        self.assertNotEqual(replacement['batch_id'],batch['batch_id'])
+        self.assertTrue(all(row['status']=='queued' for row in replacement['orders']))
         self.assertEqual(self.client.clicks,0)
     def test_crashed_run_requires_attention(self):
         batch=self.prepare()

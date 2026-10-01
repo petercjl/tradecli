@@ -1,7 +1,7 @@
 {
   "name": "@petercjl/tradecli",
   "version": "0.2.0-dev.4",
-  "description": "Codex THS account queries, visual holdings review and simulated-order CLI",
+  "description": "Codex THS account queries, holdings-based strategy plans and confirmed batch trading CLI",
   "type": "module",
   "bin": {
     "tradecli": "bin/tradecli.mjs"

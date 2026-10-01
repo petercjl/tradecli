@@ -4,7 +4,10 @@
 
 Codex-only first release. Node CLI, Python Windows worker, protocol 1.
 macOS + Parallels is the primary runtime. Native Windows transport is implemented
-but not live-tested. The released 0.1.0 supports queries; the 0.2.0-dev.2 source adds visual holdings, simulated orders and single-worker simulated batches.
+but not live-tested. The released 0.1.0 supports queries. The current 0.2.0-dev.4
+checkout includes visual holdings, strategy planning, simulated orders, and
+single-worker simulated or real-account batches. Real-account submission has
+automated tests but no live funded-account validation.
 
 ## Development evidence
 
@@ -127,3 +130,44 @@ current-day ledger for side, code, 100-share quantity and limit price. All
 fifteen showed zero filled at inspection. The five sell orders covered three
 held securities, with two securities split into two orders each. No funded
 account was used for submission.
+
+## Strategy and real-account batch update (2026-10-01)
+
+The source checkout now converts order deltas or target holdings into an exact
+per-row before/after share table using a recent reconciled holdings review.
+Tests cover repeated sell rows, target arithmetic, unavailable shares, missing
+names, account mismatch, stale evidence, and private output files. The real
+default-price batch path binds the account type and ID, rejects cross-kind run
+commands, and persists each order before confirmation. The full Node and Python
+test suites pass, as do Skill format, portability, capability-contract, package
+dry-run, and syntax checks. No new market order or funded-account submission was
+performed in this update.
+
+## Eight-row simulated strategy trial (2026-10-01)
+
+The holdings-based Skill generated a table for five buys and three sells in the
+simulated account. The user confirmed the complete table. The first buy returned
+a contract number; the second buy lost its success receipt and did not appear
+in two refreshed order-ledger captures. The worker marked that row `unknown`
+and left six rows unattempted. A fresh, separately confirmed six-row plan
+stopped before any submit because the previous buy form still held the second
+order. After identifying that task-owned draft, the form was cleared without
+resubmitting the unknown row. A fix now permits preparing an identical plan
+again only when all rows of the failed batch remain `queued`. The rerun
+completed all six. Seven distinct contracts across both runs appeared
+in the current-day ledger, all unfilled at inspection. The missing-receipt buy
+remains unresolved. Refreshed holdings showed unchanged actual share counts.
+
+## Real-account rejected order trial (2026-10-01)
+
+A user-confirmed two-row plan targeted one funded account: buy 100 shares of
+600221, then sell 100 shares of a held security. The worker matched the real
+account and the full THS confirmation for the buy, sent confirmation once, and
+received no success contract within its receipt window. It marked the buy
+`unknown` and left the sell `queued`. Two refreshed current-day order views
+showed no accepted order. The user subsequently supplied a THS error screenshot
+stating that orders were not allowed during a system pre-initialization backup
+(`-150906060`, status `5`). This evidence establishes a client-side rejection
+for that attempt, while the persisted batch record conservatively remains
+`unknown`. The task-owned buy form was left for manual inspection. No funded
+account acceptance or fill was verified.
