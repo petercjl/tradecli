@@ -136,6 +136,16 @@
         "CAPABILITY_UNAVAILABLE",
         "HOLDINGS_INCOMPLETE"
       ]
+    },
+    {
+      "id": "trade.joinquant-sync",
+      "purpose": "Reconcile a JoinQuant simulated portfolio with one THS account and phase-gate equal-cash buying",
+      "required": true,
+      "required_features": ["exact-live-strategy", "code-set-diff", "verified-sell-fills", "fresh-usable-cash", "market-reference-quotes", "user-confirmed-phases"],
+      "input_fields": ["strategy_name", "account_id", "holdings_review", "verified_fills", "fresh_quotes"],
+      "output_fields": ["sell_orders_path", "buy_orders_path", "plan", "allocation"],
+      "side_effects": {"external_mutation": false, "may_cost_money": false, "authorization": "User-requested private synchronization plan; order batches require separate confirmation"},
+      "errors": ["JQCLI_QUERY_FAILED", "SYNC_FILLS_INCOMPLETE", "SYNC_QUOTES_STALE_OR_INVALID", "SYNC_SELLS_NOT_COMPLETE"]
     }
   ]
 }

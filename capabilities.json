@@ -45,7 +45,10 @@
     "batches prepare-real-market",
     "batches run-simulated",
     "batches run-real",
-    "batches status"
+    "batches status",
+    "sync plan",
+    "sync quotes",
+    "sync allocate"
   ],
   "sideEffects": [
     "Private configuration, operation records and screenshots",
@@ -56,6 +59,8 @@
     "Explicit real-account default-price batch submission after a reviewed holdings plan and user confirmation",
     "Explicit real-account market-order batch submission after a reviewed holdings plan and user confirmation",
     "Legacy copy recovery only",
+    "JoinQuant live-position query and private synchronization plans",
+    "Read-only THS market-reference quote form inspection",
     "Explicit runtime and Skill installation"
   ],
   "transports": {

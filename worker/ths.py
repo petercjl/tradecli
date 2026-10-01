@@ -318,6 +318,44 @@ class ReadOnlyTHS:
                 "market_strategy": strategy, "market_strategy_index": index,
                 "available_strategies": labels}
 
+    def market_quotes(self, account, codes):
+        if not isinstance(codes, list) or not 1 <= len(codes) <= 15 or len(codes) != len(set(codes)):
+            raise RuntimeError("QUOTE_CODES_INVALID")
+        if any(not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code) for code in codes):
+            raise RuntimeError("QUOTE_CODES_INVALID")
+        if account_id(self.accounts()["current_account"]) != account:
+            raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+        self.open_market_page("buy")
+        items=[]
+        try:
+            for code in codes:
+                fields=self.market_order_fields("buy")
+                if fields["code"] or fields["quantity"]:
+                    raise RuntimeError("FORM_DRAFT_PRESENT")
+                type_numeric_edit(self.control("Edit", 1032), code)
+                time.sleep(2.0)
+                if account_id(self.accounts()["current_account"]) != account:
+                    raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
+                fields=self.market_order_fields("buy")
+                if fields["code"] != code or fields["quantity"]:
+                    raise RuntimeError("QUOTE_READBACK_MISMATCH")
+                if (not fields["market_strategy"] or "不支持市价委托" in fields["market_strategy"]
+                        or not re.fullmatch(r"[0-9]{1,6}(?:\.[0-9]{1,3})?", fields["reference_price"])
+                        or Decimal(fields["reference_price"]) <= 0):
+                    raise RuntimeError("MARKET_QUOTE_UNAVAILABLE")
+                items.append({"code":code,"reference_price":fields["reference_price"],
+                              "market_strategy":fields["market_strategy"]})
+                self.reset_market_form("buy")
+        finally:
+            # A quote probe owns only the code it typed; clear it on failure too.
+            fields=self.market_order_fields("buy")
+            if fields["code"] in codes and not fields["quantity"]:
+                fields=self.reset_market_form("buy")
+            if not fields["code"] and not fields["quantity"]:
+                self.open_page("holdings")
+        return {"account_id":account,"captured_at":time.time(),"items":items,
+                "source":"ths_market_reference_fields"}
+
     def market_page_active(self, side):
         target = "买入" if side == "buy" else "卖出" if side == "sell" else None
         if target is None:
@@ -1042,7 +1080,7 @@ def dispatch(request, store, factory=ReadOnlyTHS):
                "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
         store.save(batch)
         return batch_result(batch)
-    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.run-simulated", "batches.run-real", "funds", "positions", "snapshot", "doctor"):
+    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.run-simulated", "batches.run-real", "sync.quotes", "funds", "positions", "snapshot", "doctor"):
         raise RuntimeError("COMMAND_UNSUPPORTED")
     pending=store.pending()
     if pending:
@@ -1056,6 +1094,8 @@ def dispatch(request, store, factory=ReadOnlyTHS):
                 "interactive_session":os.environ.get("SESSIONNAME","unknown"),
                 "simulated_orders_only":False,"real_default_price_batches":True}
     if action == "accounts": return {"ok":True,**public_accounts(client.accounts())}
+    if action == "sync.quotes":
+        return {"ok":True,**client.market_quotes(request.get("account"),request.get("codes"))}
     if action == "batches.prepare":
         account=request.get("account")
         orders=validate_batch_orders(request.get("orders"),account)

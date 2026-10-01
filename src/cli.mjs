@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { root, pkg, run, Fault, config, createConfig, output, parse } from './common.mjs';
 import { discover, runtime, invoke } from './transport.mjs';
 import { saveCaptures, reviewCapture } from './visual.mjs';
 import { validateBatchFile } from './batches.mjs';
 import { planStrategyFile } from './strategy.mjs';
+import { createSyncPlan, allocateSyncBuys } from './sync.mjs';
 export const help = `tradecli — Codex THS account query and batch-order CLI
   version | capabilities | schema | doctor
   connections discover
@@ -36,6 +38,9 @@ export const help = `tradecli — Codex THS account query and batch-order CLI
   batches run-simulated --batch <id> --account <id> --digest <sha256> --yes
   batches run-real --batch <id> --account <id> --digest <sha256> --yes
   batches status --batch <id>
+  sync plan --strategy-name <JoinQuant-live-name> --review <review.json> [--account <id>]
+  sync quotes --plan <sync-plan.json> --account <id>
+  sync allocate --plan <sync-plan.json> --review <fresh-review.json> --fills <verified-fills.json> --quotes <THS-quotes.json> [--sell-batch <id>]
   funds get [--account <id>]
   positions list [--account <id>]
   positions review --capture <id> --input <review.json>
@@ -79,6 +84,7 @@ const options={
  'batches prepare':['input','account'], 'batches prepare-default':['input','account'], 'batches prepare-real-default':['input','account'],
  'batches prepare-market':['input','account'], 'batches prepare-real-market':['input','account'],
  'batches run-simulated':['batch','account','digest','yes'], 'batches run-real':['batch','account','digest','yes'], 'batches status':['batch'],
+ 'sync plan':['strategy-name','review','account'], 'sync quotes':['plan','account'], 'sync allocate':['plan','review','fills','quotes','sell-batch'],
  'funds get':['account'], 'positions list':['account'], 'snapshots create':['accounts'],
  'operations status':[], 'operations resume':[], 'operations abandon':['yes'],
  'skill source':['agent'], 'skill status':['agent'], 'skill install':['agent'], 'skill update':['agent'],
@@ -118,6 +124,17 @@ export function execute(argv) {
   if(flags.account&&!/^a_[a-f0-9]{16}$/.test(flags.account))throw new Fault('ACCOUNT_ID_INVALID');
   return planStrategyFile(flags.review,flags.strategy,flags.account,key==='batches plan-market'?'market':'client_default');
  }
+ if(key==='sync plan') {
+  if(!flags['strategy-name']||!flags.review)throw new Fault('SYNC_INPUT_REQUIRED');
+  if(flags.account&&!/^a_[a-f0-9]{16}$/.test(flags.account))throw new Fault('ACCOUNT_ID_INVALID');
+  return createSyncPlan(flags.review,flags['strategy-name'],flags.account);
+ }
+ if(key==='sync allocate') {
+  if(!flags.plan||!flags.review||!flags.fills||!flags.quotes)throw new Fault('SYNC_INPUT_REQUIRED');
+  if(flags['sell-batch']&&!/^[a-f0-9-]{36}$/.test(flags['sell-batch']))throw new Fault('BATCH_ID_REQUIRED');
+  const batch=flags['sell-batch']?invoke(config(),{action:'batches.status',batch:flags['sell-batch']}):undefined;
+  return allocateSyncBuys(flags.plan,flags.review,flags.fills,flags.quotes,batch);
+ }
  if(args[0]==='update') {
   const latest=JSON.parse(run('npm',['view',pkg.name,'version','--json']));
   if(!/^\d+\.\d+\.\d+$/.test(latest))throw new Fault('REGISTRY_VERSION_INVALID');
@@ -127,6 +144,18 @@ export function execute(argv) {
   return {ok:true,installed:latest,verify:'tradecli version'};
  }
  const c=config();
+ if(key==='sync quotes') {
+  if(!flags.plan||!/^a_[a-f0-9]{16}$/.test(flags.account||''))throw new Fault('SYNC_INPUT_REQUIRED');
+  const plansRoot=path.resolve(process.env.TRADECLI_HOME || path.join(os.homedir(),'.tradecli'),'sync-plans')+path.sep;
+  if(!path.resolve(flags.plan).startsWith(plansRoot)||!/^[a-f0-9-]{36}\.json$/.test(path.basename(flags.plan)))throw new Fault('SYNC_PLAN_REQUIRED');
+  let plan;try {plan=JSON.parse(fs.readFileSync(flags.plan,'utf8'));} catch {throw new Fault('SYNC_PLAN_REQUIRED');}
+  if(plan.account_id!==flags.account||!Array.isArray(plan.buys)||plan.buys.length<1)throw new Fault('SYNC_ACCOUNT_MISMATCH');
+  const result=invoke(c,{action:'sync.quotes',account:flags.account,codes:plan.buys.map(x=>x.code)},120000);
+  if(!result.ok)return result;
+  const quotePath=path.join(plansRoot,`${crypto.randomUUID()}-quotes.json`);
+  fs.writeFileSync(quotePath,JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o600});
+  return {...result,quotes_path:quotePath};
+ }
  if(args[0]==='batches') {
   if(args[1]==='status') {
    if(!/^[a-f0-9-]{36}$/.test(flags.batch||''))throw new Fault('BATCH_ID_REQUIRED');

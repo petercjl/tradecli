@@ -77,6 +77,17 @@
         "kind": "native-tool",
         "invocation": "Use Codex view_image for the returned local image_path, then the host filesystem tool to write a new private JSON review. Validate through tradecli positions review."
       }
+    },
+    {
+      "capability_id": "trade.joinquant-sync",
+      "status": "implemented",
+      "features": ["exact-live-strategy", "code-set-diff", "verified-sell-fills", "fresh-usable-cash", "market-reference-quotes", "user-confirmed-phases"],
+      "implementation": {
+        "kind": "cli",
+        "command": "tradecli",
+        "discovery": ["tradecli version", "tradecli schema", "jqcli --version"],
+        "invocation": "Use sync plan with a fresh THS holdings review. After user confirmation and actual sell fills, use sync quotes and sync allocate with a new review and visually verified fills. Confirm exact buy shares before preparing the buy batch."
+      }
     }
   ]
 }
