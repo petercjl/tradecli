@@ -10,7 +10,7 @@ but not live-tested. No order execution is implemented.
 
 - 5 Node tests: CLI boundaries, safe quoting, private/non-overwriting config,
   Codex Skill installation/conflict preservation, read-only capability discovery.
-- 15 Python tests: visible-control selection, dialog classification, resume guards,
+- 17 Python tests: visible-control selection, dialog classification, resume guards,
   durable operation records, no duplicate copy, account mismatch, restoration,
   explicit abandonment and strict holdings parsing.
 - Current base Skill creator scaffold and validator used.
@@ -22,8 +22,10 @@ but not live-tested. No order execution is implemented.
 The preceding adapter prototype demonstrated two-account funds, holdings and
 selection on Windows 11 ARM using Python 3.11 x64 with a 32-bit THS client.
 Those observations do not constitute end-to-end acceptance of this package.
-Real CAPTCHA completion/resume, equal-value account transitions, native Windows
-host execution, lock-screen recovery and server-side freshness remain unverified.
+One real CAPTCHA completion/resume passed with nine holdings rows, no reconciliation
+warnings and restoration of the original account. Equal-value account transitions,
+native Windows host execution, lock-screen recovery and server-side freshness remain
+unverified. One successful recovery does not establish unattended reliability.
 
 ## Skill knowledge read-set audit
 
@@ -39,7 +41,8 @@ The new CLI installed its own isolated Windows dependencies, deployed the
 content-addressed worker, attached to the current THS client and discovered two
 accounts. A funds query selected the other account, obtained data and restored
 the original account. A holdings query reached a real manual-verification dialog
-and persisted an operation checkpoint. Completion of that request is pending.
+and persisted an operation checkpoint. After manual completion, the same request
+returned nine rows without a new copy request and restored the original account.
 
 The host uses Parallels home sharing to transfer the bundled worker as a file;
 this avoids large encoded-command payload limits. Uploaded content is verified

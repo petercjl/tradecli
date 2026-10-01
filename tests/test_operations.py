@@ -45,7 +45,15 @@ class Operations(unittest.TestCase):
     def test_mismatch_blocks_resume(self):
         result=self.call('positions');self.client.current='B'
         result=self.call('operations.resume',id=result['operation_id'])
-        self.assertFalse(result['ok']);self.assertEqual(result['error'],'COPY_CHECKPOINT_ACCOUNT_MISMATCH');self.assertEqual(self.client.copies,1);self.assertEqual(self.client.current,'B');self.assertEqual(result['restoration'],'manual_review_required')
+        self.assertFalse(result['ok']);self.assertEqual(result['error'],'COPY_CHECKPOINT_ACCOUNT_MISMATCH');self.assertEqual(self.client.copies,1);self.assertEqual(self.client.current,'B');self.assertEqual(result['status'],'waiting')
+    def test_collection_error_keeps_checkpoint_for_read_only_retry(self):
+        result=self.call('positions')
+        def broken(checkpoint):raise AttributeError('internal failure')
+        self.client.resume=broken
+        retry=self.call('operations.resume',id=result['operation_id'])
+        self.assertEqual(retry['status'],'waiting')
+        self.assertEqual(self.call('funds')['error'],'OPERATION_PENDING')
+        self.assertEqual(self.client.copies,1)
     def test_database_retains_checkpoint_across_connections(self):
         result=self.call('positions');self.store.db.close();self.store=Store(Path(self.tmp.name)/'ops.db')
         self.assertIn('checkpoint',self.store.get(result['operation_id']))

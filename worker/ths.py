@@ -195,8 +195,8 @@ class ReadOnlyTHS:
         if result["current_account"] != checkpoint["account"]:
             raise RuntimeError("COPY_CHECKPOINT_ACCOUNT_MISMATCH")
         sequence = win32clipboard.GetClipboardSequenceNumber()
-        import win32gui, win32process
-        owner = win32gui.GetClipboardOwner()
+        import win32process
+        owner = win32clipboard.GetClipboardOwner()
         if not owner or win32process.GetWindowThreadProcessId(owner)[1] != self.app.process:
             raise RuntimeError("CLIPBOARD_PROVENANCE_UNVERIFIED")
         win32clipboard.OpenClipboard()
@@ -299,7 +299,8 @@ class Store:
 
     def pending(self):
         return [json.loads(row[0]) for row in self.db.execute("SELECT data FROM operations")
-                if json.loads(row[0])["status"] in ("running", "waiting")]
+                if json.loads(row[0])["status"] in ("running", "waiting")
+                or (json.loads(row[0])["status"] == "failed" and json.loads(row[0]).get("checkpoint"))]
 
 
 def safe_error(exc):
@@ -341,6 +342,10 @@ def execute_operation(client, store, op, resume=False):
         store.save(op)
         return result_for(op)
     except Exception as exc:
+        if op.get("checkpoint"):
+            op.update(status="waiting",error=safe_error(exc))
+            store.save(op)
+            return result_for(op)
         op.update(status="failed",error=safe_error(exc))
     if op.get("error") in ("COPY_CHECKPOINT_ACCOUNT_MISMATCH", "ACCOUNT_CHANGED_DURING_READ"):
         op["restoration"] = "manual_review_required"
@@ -364,13 +369,13 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         if action == "operations.status": return result_for(op)
         if action == "operations.abandon":
             if not request.get("yes"): raise RuntimeError("CONFIRMATION_REQUIRED")
-            if op["status"] not in ("waiting", "running"): raise RuntimeError("OPERATION_TERMINAL")
+            if op["status"] not in ("waiting", "running") and not (op["status"] == "failed" and op.get("checkpoint")): raise RuntimeError("OPERATION_TERMINAL")
             op.update(status="abandoned",error="USER_ABANDONED",restoration="manual_review_required")
             store.save(op)
             return {"ok":True,"operation_id":op["id"],"status":"abandoned"}
         if action != "operations.resume": raise RuntimeError("COMMAND_UNSUPPORTED")
         if op["status"] == "completed": return result_for(op)
-        if op["status"] not in ("waiting", "running"): raise RuntimeError("OPERATION_TERMINAL")
+        if op["status"] not in ("waiting", "running") and not (op["status"] == "failed" and op.get("checkpoint")): raise RuntimeError("OPERATION_TERMINAL")
         try: client = factory(request["exe"])
         except Exception as exc:
             return {**result_for(op),"ok":False,"error":safe_error(exc)}

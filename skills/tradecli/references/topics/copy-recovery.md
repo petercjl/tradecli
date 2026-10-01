@@ -16,5 +16,6 @@ resume it. If expired or invalid, explain that the old request cannot establish
 freshness; explicit abandonment releases the gate but leaves the UI unchanged.
 A new query after abandonment must wait until the client is ready.
 
-Gap: synthetic tests cover resume without recopying; real CAPTCHA completion and
-recovery must be verified on the deployed client before claiming unattended use.
+Evidence: synthetic tests cover resume without recopying; one real CAPTCHA
+completion/resume returned holdings successfully. Repeated unattended reliability
+remains unverified, and each different client version requires its own acceptance.
