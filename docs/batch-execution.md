@@ -1,11 +1,11 @@
 # Account-bound batch execution
 
-`batches plan-default` accepts a private strategy file and a recent, reconciled
+`batches plan-market` accepts a private strategy file and a recent, reconciled
 `positions review` result. Strategy input is either ordered buy/sell share deltas
 (`orders`) or target holdings (`targets`). It calculates before/after shares,
 checks sellable quantity, binds the account and writes a private executable order
 file. The Codex Skill presents every row and the account in a confirmation table
-before preparing or running the batch. Prices come from THS at execution time.
+before preparing or running the batch. The plan contains no prices.
 
 `batches validate` checks a private JSON file of 1–15 orders. Buy codes must
 be unique within a batch; sell orders may split one held security into multiple
@@ -26,6 +26,18 @@ If the client leaves the price empty or changes a field, the batch stops.
 The CLI requires `--yes` on execution after the user confirms the account,
 order directions, stock codes and share quantities.
 
+For market orders, use `batches validate-market`, `batches plan-market`, and
+`batches prepare-market` (or `batches prepare-real-market` for a real account).
+The worker opens 市价委托 for each row, enters the stock code, then reads the
+available strategy selected by THS. The strategy differs by stock, exchange and
+account. It reads the displayed 最新价格 as a reference but never types it. The
+worker validates stock code, share count and exact strategy again before the
+first click, then validates the market-order confirmation before the final click.
+An unsupported strategy, changed form or unknown result stops the remaining rows.
+The displayed reference is not a fixed execution price; the exchange may fill at
+different prices, partially fill, or cancel the remainder according to the
+selected market-order strategy.
+
 `batches run-simulated` attaches one Windows worker to the THS desktop and handles
 orders serially. For each row it fills the form, reads back account and fields,
 records `submit_attempted`, clicks once, validates the confirmation dialog,
@@ -33,13 +45,15 @@ records `confirm_attempted`, sends the dialog accelerator, and polls for a succe
 receipt carrying a contract number. It acknowledges that receipt and checks the
 form before advancing. The SQLite operation record is committed at each boundary.
 
-For a real funded account, `batches prepare-real-default` verifies that the
+For a real funded account, `batches prepare-real-market` verifies that the
 currently selected THS account ID and type match the plan, then
 `batches run-real` repeats that check before and during each order. A simulated
 batch cannot be run through the real command or vice versa. Real execution has
 the same at-most-once checkpoints, dialog validation, receipt polling, and
 stop-on-uncertainty behavior as simulated execution. The real-account path has
-automated tests, but no live funded-account submission has been performed.
+automated tests and read-only Windows form inspection. A simulated market-order
+confirmation was inspected and canceled before final submission. No live
+funded-account market-order submission has been performed.
 
 An ambiguous or absent receipt stops the batch with `needs_attention`; the
 attempted row becomes `unknown`, later rows remain queued. A recognized contract

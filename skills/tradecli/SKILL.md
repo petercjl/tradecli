@@ -65,7 +65,7 @@ from filled orders. Never infer a successful submission from an incomplete recei
   it does not dismiss a dialog or restore the account. Use only when the user
   chooses to abandon that operation, then return to step 2.
 - Unsupported capability: terminate with `FEATURE_UNSUPPORTED`. Real-account
-  orders use confirmed default-price batches; individual real-order submission,
+  orders use confirmed market-order batches; individual real-order submission,
   cancellation and login are not implemented.
 
 ## On-demand knowledge
@@ -180,12 +180,12 @@ portfolio adjustment strategy. It applies to simulated and real accounts.
 
    Held-stock names come from the holdings review and may be omitted. In
    `orders`, repeated sell rows are allowed; each row's current shares are the
-   shares immediately before that row in plan order. Run `batches plan-default
+   shares immediately before that row in plan order. Run `batches plan-market
    --strategy <file> --review <review_path> --account <id>`. This command rejects
    stale or inconsistent holdings, account/name mismatches, unavailable sell
    shares, empty target changes, and invalid batches. It returns `orders_path`,
-   `plan_path`, and rows with before and planned-after quantities. Client default
-   prices are used during execution; the strategy does not contain prices.
+   `plan_path`, and rows with before and planned-after quantities. The strategy
+   does not contain prices.
 4. Show the user the account label/type and a table with these columns in order:
    **序号、股票代码、股票名称、当前持股数、方向、买卖股数、操作后持股数**.
    Include all rows in execution order. The last column is the planned holding
@@ -193,14 +193,16 @@ portfolio adjustment strategy. It applies to simulated and real accounts.
    explicit confirmation of this account and complete table. A changed strategy,
    account, holdings, or row order requires a new plan and confirmation. Do not
    treat `--yes` as a substitute for the user's confirmation.
-5. After confirmation, use `batches prepare-default --input <orders_path>
-   --account <id>` for a simulated account, or `batches prepare-real-default`
+5. After confirmation, use `batches prepare-market --input <orders_path>
+   --account <id>` for a simulated account, or `batches prepare-real-market`
    for a real account. Compare its returned account, order sequence, quantities,
    mode, and digest with the confirmed plan. Preparation expires in five minutes.
    Ensure THS has the bound account selected. Run the matching `batches
    run-simulated` or `batches run-real --batch <id> --account <id> --digest
-   <digest> --yes` once. The Windows worker submits orders serially, checks the
-   default price and full THS confirmation for each, and stops on an unexpected
+   <digest> --yes` once. The Windows worker submits orders serially through
+   市价委托. For each stock it reads the available market strategy after entering
+   the code, leaves the THS reference-price field untouched, checks the full
+   confirmation, and stops on an unavailable market strategy, unexpected
    dialog, account change, or unknown receipt. It never retries an attempted row.
 6. Run `batches status --batch <id>`, then `orders ledger --account <id>` and
    visually match every accepted contract number to code, side, quantity, and
@@ -232,11 +234,13 @@ only. Read-only planning and preparation do not authorize another batch. The
 worker checks the real-account identity immediately before and during every
 order. Any verification prompt is handled manually by the user; stop rather than
 clicking through it. The Codex Skill and CLI may be tested on macOS with a
-Parallels Windows client. A real-account order attempt has exercised the
-confirmation path and was rejected by THS before acceptance; a successful
-funded-account acceptance and fill remain untested. If THS shows a later
-rejection outside the worker's receipt window, report that client evidence
-alongside the batch's `unknown` state and leave subsequent rows unattempted.
+Parallels Windows client. A real-account order attempt exercised the ordinary
+order confirmation path and was rejected by THS before acceptance. A market
+order confirmation was inspected in a simulated account and canceled before
+final submission. Market-order acceptance and fill in a funded account remain
+untested. If THS shows a later rejection outside the worker's receipt window,
+report that client evidence alongside the batch's `unknown` state and leave
+subsequent rows unattempted.
 
 ## Legacy simulated batch branch → step 6
 
@@ -261,5 +265,7 @@ alongside the batch's `unknown` state and leave subsequent rows unattempted.
    last confirmed contract and unattempted rows. Do not rerun or replace uncertain
    orders. Return to step 6 of the main line.
 
-This legacy branch remains for explicitly priced simulated tests. Use the
-strategy-to-batch branch for default-price strategies on either account type.
+This legacy branch remains for explicitly priced simulated tests. The ordinary
+form's automatic default-price path remains available through `batches
+plan-default`, `batches prepare-default`, and `batches prepare-real-default`.
+Use the strategy-to-batch branch for market-order strategies on either account type.

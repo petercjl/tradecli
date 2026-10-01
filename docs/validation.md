@@ -2,20 +2,18 @@
 
 ## Scope
 
-Codex-only first release. Node CLI, Python Windows worker, protocol 1.
+Codex-only package. Node CLI, Python Windows worker, protocol 1.
 macOS + Parallels is the primary runtime. Native Windows transport is implemented
-but not live-tested. The released 0.1.0 supports queries. The current 0.2.0-dev.4
-checkout includes visual holdings, strategy planning, simulated orders, and
-single-worker simulated or real-account batches. Real-account submission has
-automated tests but no live funded-account validation.
+but not live-tested. The released 0.2.0 supports visual holdings, strategy
+planning and confirmed batches. This working tree adds market-order form routing.
+Funded-account market-order submission has automated tests and read-only form
+inspection but no live acceptance or fill validation.
 
 ## Development evidence
 
-- 5 Node tests: CLI boundaries, safe quoting, private/non-overwriting config,
-  Codex Skill installation/conflict preservation, read-only capability discovery.
-- 17 Python tests: visible-control selection, dialog classification, resume guards,
-  durable operation records, no duplicate copy, account mismatch, restoration,
-  explicit abandonment and strict holdings parsing.
+- Current suite: 14 Node tests and 52 Python tests, covering the CLI contract,
+  private state, account binding, holdings review, batch checkpoints, and
+  market-order confirmation parsing.
 - Current base Skill creator scaffold and validator used.
 - Platform portability, hybrid knowledge and capability-contract validators pass.
 - No isolated clean-context regression requested or claimed.
@@ -171,3 +169,25 @@ stating that orders were not allowed during a system pre-initialization backup
 for that attempt, while the persisted batch record conservatively remains
 `unknown`. The task-owned buy form was left for manual inspection. No funded
 account acceptance or fill was verified.
+## Market-order form inspection (2026-10-01)
+
+Read-only Win32 inspection of the Parallels THS client found the 市价委托 tree
+entries for buy and sell, strategy ComboBox ID 1541, code and quantity edits
+1032/1034, and 最新价格 edit 1033. The strategy reads “不支持市价委托” until a stock
+code is entered. After entering a code, available strategies differ by stock,
+exchange, and simulated versus funded account. In the funded account, the
+tested Shenzhen stock defaulted to 对手方最优 and the tested Shanghai stock
+defaulted to 五档即成剩撤; the latter also offered 对手方最优. The simulator's
+Shanghai list had two five-level choices, while its Shenzhen list included
+对手方最优. The price field was disabled for the tested Shenzhen stock and enabled
+for the tested Shanghai stock; the worker leaves it untouched in both cases.
+
+The updated worker filled and read back one simulated buy and one simulated sell
+through 市价委托, then reset both forms without submitting. In a separate
+simulated sell probe, the first button was clicked to inspect the confirmation.
+The dialog showed
+stock code, exact strategy, latest reference price, share quantity, and a
+separate final Yes/No choice. No was clicked; the form was then reset. No final
+market order was submitted. Unit tests exercise market-batch mode, account-kind
+binding, confirmation matching, and stop-on-uncertainty. Acceptance and fill
+through this market-order route remain unverified in a live client.

@@ -25,10 +25,14 @@ export const help = `tradecli — Codex THS account query and batch-order CLI
   orders ledger --account <id>
   batches validate --input <orders.json>
   batches validate-default --input <orders.json>
+  batches validate-market --input <orders.json>
   batches plan-default --strategy <strategy.json> --review <review.json> [--account <id>]
+  batches plan-market --strategy <strategy.json> --review <review.json> [--account <id>]
   batches prepare --input <orders.json> --account <id>
   batches prepare-default --input <orders.json> --account <id>
   batches prepare-real-default --input <orders.json> --account <id>
+  batches prepare-market --input <orders.json> --account <id>
+  batches prepare-real-market --input <orders.json> --account <id>
   batches run-simulated --batch <id> --account <id> --digest <sha256> --yes
   batches run-real --batch <id> --account <id> --digest <sha256> --yes
   batches status --batch <id>
@@ -44,7 +48,7 @@ All commands return JSON. --json is accepted. Read errors exit 2.
 Config is created once in TRADECLI_HOME (default ~/.tradecli).
 Funds/positions require the THS funds/holdings page. Positions returns fresh images for Codex review; it never copies or exports the table.
 Pending operations must be resumed or explicitly abandoned before another query.
-Real-account submission is available only through account-bound, confirmed default-price batches.
+Real-account submission is available through account-bound, confirmed market or default-price batches.
 `;
 export function skill(action,agent='codex') {
  if(agent!=='codex') throw new Fault('AGENT_UNSUPPORTED',{supported:['codex']});
@@ -70,7 +74,10 @@ const options={
  'orders submit-simulated':['draft','account'], 'orders result':['draft'],
  'orders confirm-simulated':['draft','account'], 'orders acknowledge':['draft','account'],
  'orders ledger':['account'],
- 'batches validate':['input'], 'batches validate-default':['input'], 'batches plan-default':['strategy','review','account'], 'batches prepare':['input','account'], 'batches prepare-default':['input','account'], 'batches prepare-real-default':['input','account'],
+ 'batches validate':['input'], 'batches validate-default':['input'], 'batches validate-market':['input'],
+ 'batches plan-default':['strategy','review','account'], 'batches plan-market':['strategy','review','account'],
+ 'batches prepare':['input','account'], 'batches prepare-default':['input','account'], 'batches prepare-real-default':['input','account'],
+ 'batches prepare-market':['input','account'], 'batches prepare-real-market':['input','account'],
  'batches run-simulated':['batch','account','digest','yes'], 'batches run-real':['batch','account','digest','yes'], 'batches status':['batch'],
  'funds get':['account'], 'positions list':['account'], 'snapshots create':['accounts'],
  'operations status':[], 'operations resume':[], 'operations abandon':['yes'],
@@ -100,16 +107,16 @@ export function execute(argv) {
   if(!flags.capture||!flags.input)throw new Fault('REVIEW_ARGUMENTS_REQUIRED');
   return reviewCapture(flags.capture,flags.input);
  }
- if(key==='batches validate'||key==='batches validate-default') {
+ if(['batches validate','batches validate-default','batches validate-market'].includes(key)) {
   if(!flags.input)throw new Fault('BATCH_INPUT_REQUIRED');
-  const mode=key==='batches validate-default'?'default':'limit';
-  const plan=validateBatchFile(flags.input,mode);
+  const mode=key==='batches validate'?'limit':key==='batches validate-market'?'market':'default';
+  const plan=validateBatchFile(flags.input,mode==='limit'?'limit':'default');
   return {ok:true,status:'validated',price_mode:mode,orders:plan.orders,count:plan.orders.length};
  }
- if(key==='batches plan-default') {
+ if(key==='batches plan-default'||key==='batches plan-market') {
   if(!flags.strategy||!flags.review)throw new Fault('STRATEGY_INPUT_REQUIRED');
   if(flags.account&&!/^a_[a-f0-9]{16}$/.test(flags.account))throw new Fault('ACCOUNT_ID_INVALID');
-  return planStrategyFile(flags.review,flags.strategy,flags.account);
+  return planStrategyFile(flags.review,flags.strategy,flags.account,key==='batches plan-market'?'market':'client_default');
  }
  if(args[0]==='update') {
   const latest=JSON.parse(run('npm',['view',pkg.name,'version','--json']));
@@ -126,7 +133,7 @@ export function execute(argv) {
    return invoke(c,{action:'batches.status',batch:flags.batch});
   }
   if(!/^a_[a-f0-9]{16}$/.test(flags.account||''))throw new Fault('ACCOUNT_REQUIRED');
-  if(['prepare','prepare-default','prepare-real-default'].includes(args[1])) {
+  if(['prepare','prepare-default','prepare-real-default','prepare-market','prepare-real-market'].includes(args[1])) {
    if(!flags.input)throw new Fault('BATCH_INPUT_REQUIRED');
    const plan=validateBatchFile(flags.input,args[1]==='prepare'?'limit':'default');
    return invoke(c,{action:`batches.${args[1]}`,account:flags.account,orders:plan.orders});

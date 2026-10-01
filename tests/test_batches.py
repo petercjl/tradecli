@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'worker'))
-from ths import Store, dispatch, account_id, ReadOnlyTHS, receipt_contract, decode_request
+from ths import Store, dispatch, account_id, ReadOnlyTHS, receipt_contract, decode_request, validate_market_confirmation
 
 
 class BatchClient:
@@ -36,10 +36,19 @@ class BatchClient:
                 'price_source':'ths_default_price_field','captured_at':time.time()}
         if not preview:self.fields=result
         return result
+    def market_order(self,order):
+        result={**order,'unit':'shares','market_strategy':'1-对手方最优价格申报',
+                'market_strategy_index':0,'reference_price':'1.25','captured_at':time.time()}
+        self.fields=result
+        return result
+    def market_order_fields(self,side):
+        return self.fields or {'side':side,'unit':'shares','code':'','quantity':'',
+                               'market_strategy':'不支持市价委托','market_strategy_index':0}
     def order_fields(self,side):
         return self.fields or {'side':side,'unit':'shares','code':'','price':'','quantity':''}
     def control(self,kind,identity):
         if (kind,identity)==('Button',1006):return SimpleNamespace(click=self.click)
+        if (kind,identity)==('Button',1007):return SimpleNamespace(window_text=lambda:'重填',click=self.reset)
         if kind=='Edit' and identity in (1032,1033,1034):
             key={1032:'code',1033:'price',1034:'quantity'}[identity]
             return SimpleNamespace(type_keys=lambda *a,**kw:self.fields.__setitem__(key,''))
@@ -63,6 +72,12 @@ class BatchClient:
         self.response={'status':'submission_unconfirmed','dialogs':[]}
         if self.auto_clear:
             self.fields={'side':'buy','unit':'shares','code':'','price':'','quantity':''}
+    def reset(self):
+        self.fields={'side':'buy','unit':'shares','code':'','quantity':'',
+                     'market_strategy':'不支持市价委托','market_strategy_index':0}
+    def reset_market_form(self,side):
+        self.reset()
+        return self.fields
 
 
 class Batches(unittest.TestCase):
@@ -107,6 +122,19 @@ class Batches(unittest.TestCase):
         self.assertEqual(result['status'],'completed')
         self.assertEqual(result['orders'][0]['order']['price'],'1.25')
         self.assertEqual(self.client.clicks,1)
+    def test_market_batch_uses_strategy_and_never_requires_limit_price(self):
+        self.orders=[{'side':'buy','code':'002144','quantity':'100'}]
+        batch=dispatch({'action':'batches.prepare-market','exe':'test','account':self.account,
+                        'orders':self.orders},self.store,self.factory)
+        self.assertEqual(batch['mode'],'market')
+        result=self.run_batch(batch)
+        self.assertEqual(result['status'],'completed')
+        row=result['orders'][0]
+        self.assertEqual(row['order']['market_strategy'],'1-对手方最优价格申报')
+        self.assertNotIn('price',row['order'])
+        self.assertEqual(row['preview']['reference_price'],'1.25')
+        self.assertEqual(self.client.clicks,1)
+        self.assertTrue(row['form_cleared'])
     def test_fifteen_orders_with_split_sells(self):
         self.orders=([{'side':'buy','code':str(600001+i),'price':'1.23','quantity':'100'}
                       for i in range(10)]
@@ -165,6 +193,19 @@ class Batches(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'BATCH_ALREADY_ATTEMPTED'):
             dispatch({'action':'batches.run-real','exe':'test','batch':batch['batch_id'],
                       'account':self.account,'digest':batch['digest'],'confirmed':True},self.store,self.factory)
+    def test_real_market_batch_is_account_bound(self):
+        self.client.label='真实账户-TEST'
+        self.account=account_id(self.client.label)
+        self.orders=[{'side':'buy','code':'002144','quantity':'100'}]
+        batch=dispatch({'action':'batches.prepare-real-market','exe':'test','account':self.account,
+                        'orders':self.orders},self.store,self.factory)
+        self.assertEqual(batch['mode'],'market')
+        with self.assertRaisesRegex(RuntimeError,'BATCH_ACCOUNT_KIND_MISMATCH'):
+            self.run_batch(batch)
+        result=dispatch({'action':'batches.run-real','exe':'test','batch':batch['batch_id'],
+                         'account':self.account,'digest':batch['digest'],'confirmed':True},self.store,self.factory)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(self.client.clicks,1)
     def test_simulated_account_cannot_run_real_batch(self):
         batch=self.prepare()
         with self.assertRaisesRegex(RuntimeError,'BATCH_ACCOUNT_KIND_MISMATCH'):
@@ -205,6 +246,16 @@ class Batches(unittest.TestCase):
     def test_receipt_requires_matching_side_and_contract(self):
         self.assertIsNone(receipt_contract({'dialogs':[{'text':'您的卖出委托已成功提交，合同编号：123'}]},'buy'))
         self.assertEqual(receipt_contract({'dialogs':[{'text':'您的买入委托已成功提交，合同编号：123'}]},'buy'),'123')
+    def test_market_confirmation_checks_strategy_code_and_shares(self):
+        order={'side':'sell','code':'002051','quantity':'100','market_strategy':'1-对手方最优价格申报'}
+        text=('<font color=0x888888>股东帐号：</font>123456\n'
+              '<font color=0x888888>证券代码：</font>002051(示例)\n'
+              '<font color=0x888888>委托策略：</font>1-对手方最优价格申报\n'
+              '<font color=0x888888>最新价格：</font>8.740\n'
+              '<font color=0x888888>卖出数量：</font>100\n您是否确定以上市价卖出委托？')
+        self.assertTrue(validate_market_confirmation(text,order,'模拟炒股-TEST'))
+        self.assertFalse(validate_market_confirmation(text.replace('卖出数量：</font>100','卖出数量：</font>200'),order,'模拟炒股-TEST'))
+        self.assertFalse(validate_market_confirmation(text.replace('对手方最优','本方最优'),order,'模拟炒股-TEST'))
     def test_file_request_requires_exact_hash(self):
         file=Path(self.tmp.name)/'request.json'
         self.assertFalse(file.exists())
@@ -240,6 +291,34 @@ class Batches(unittest.TestCase):
                 'quantity':'100','account':self.account})
         self.assertEqual(actual['price'],'1.23')
         self.assertEqual(writes,['code','quantity'])
+
+    def test_market_order_uses_selected_strategy_without_writing_price(self):
+        values={'code':'','quantity':'','reference_price':'0',
+                'market_strategy':'不支持市价委托','market_strategy_index':0}
+        writes=[]
+        class Edit:
+            def __init__(self,key):self.key=key
+            def is_enabled(self):return True
+            def set_focus(self):pass
+            def select(self,start,end):pass
+            def type_keys(self,value,**kwargs):
+                writes.append(self.key)
+                values[self.key]=value
+                if self.key=='code':
+                    values.update(reference_price='8.74',market_strategy='1-对手方最优价格申报')
+        class Client:
+            def assert_trading_account(self,*args):pass
+            def open_market_page(self,*args):pass
+            def market_order_fields(self,side):return dict(values,side=side,unit='shares')
+            def control(self,kind,cid):
+                if kind!='Edit' or cid not in (1032,1034):raise AssertionError('price field accessed')
+                return Edit({1032:'code',1034:'quantity'}[cid])
+        with patch('ths.time.sleep',lambda _:None):
+            result=ReadOnlyTHS.market_order(Client(),{'side':'buy','code':'002144',
+                    'quantity':'100','account':self.account})
+        self.assertEqual(writes,['code','quantity'])
+        self.assertEqual(result['market_strategy'],'1-对手方最优价格申报')
+        self.assertEqual(result['reference_price'],'8.74')
 
 
 if __name__=='__main__':unittest.main()

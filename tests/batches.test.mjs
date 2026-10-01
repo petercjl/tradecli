@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
 import { validateBatchFile } from '../src/batches.mjs';
 
 test('batch input is exact, ordered and rejects ambiguous orders',()=>{
@@ -16,6 +17,11 @@ test('batch input is exact, ordered and rejects ambiguous orders',()=>{
   const defaultPlan={orders:[{side:'buy',code:'600001',quantity:'100'}]};
   fs.writeFileSync(file,JSON.stringify(defaultPlan));
   assert.deepEqual(validateBatchFile(file,'default').orders,defaultPlan.orders);
+  const market=spawnSync(process.execPath,['bin/tradecli.mjs','batches','validate-market','--input',file],
+                         {cwd:path.resolve(import.meta.dirname,'..'),encoding:'utf8'});
+  assert.equal(market.status,0);
+  assert.deepEqual(JSON.parse(market.stdout).orders,defaultPlan.orders);
+  assert.equal(JSON.parse(market.stdout).price_mode,'market');
   assert.throws(()=>validateBatchFile(file));
   for(const bad of [
    {...good,account:'unexpected'},

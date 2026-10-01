@@ -18,6 +18,7 @@ test('strategy converts share targets and order deltas to a reviewed before/afte
  assert.deepEqual(target.rows.map(x=>[x.code,x.current_quantity,x.side,x.quantity,x.after_quantity]),[
   ['300359','500','sell','200','300'],['600221','0','buy','100','100']]);
  assert.deepEqual(target.orders,[{side:'sell',code:'300359',quantity:'200'},{side:'buy',code:'600221',quantity:'100'}]);
+ assert.equal(buildStrategyPlan(review(),{orders:[{code:'300359',side:'sell',quantity:'100'}]},account,'market').price_mode,'market');
  const split=buildStrategyPlan(review(),{orders:[
   {code:'300359',side:'sell',quantity:'100'},
   {code:'300359',side:'sell',quantity:'200'}]});
@@ -45,8 +46,9 @@ test('planner writes private executable orders and a bound plan',()=>{
   const reviewFile=path.join(capture,'review-1234.json');const strategyFile=path.join(dir,'strategy.json');
   fs.writeFileSync(reviewFile,JSON.stringify(review()));
   fs.writeFileSync(strategyFile,JSON.stringify({orders:[{code:'600221',name:'海航控股',side:'buy',quantity:'100'}]}));
-  const plan=planStrategyFile(reviewFile,strategyFile);
+  const plan=planStrategyFile(reviewFile,strategyFile,undefined,'market');
   assert.equal(plan.account_id,account);
+  assert.equal(plan.price_mode,'market');
   assert.deepEqual(JSON.parse(fs.readFileSync(plan.orders_path,'utf8')),{orders:plan.orders});
   assert.equal(fs.statSync(plan.orders_path).mode&0o777,0o600);
   assert.equal(fs.statSync(plan.plan_path).mode&0o777,0o600);
