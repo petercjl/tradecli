@@ -1,10 +1,10 @@
-import sys, unittest, tempfile, time
+import sys, unittest, tempfile, time, json, hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'worker'))
-from ths import Store, dispatch, account_id, ReadOnlyTHS, receipt_contract
+from ths import Store, dispatch, account_id, ReadOnlyTHS, receipt_contract, decode_request
 
 
 class BatchClient:
@@ -54,7 +54,8 @@ class BatchClient:
         if self.fail_at==self.confirmations:
             self.response={'status':'submission_unconfirmed','dialogs':[],'timeline':[{'event':'timeout'}]}
             return self.response
-        self.receipt_text=f'您的买入委托已成功提交，合同编号：{1000+self.confirmations}'
+        action='买入' if order['side']=='buy' else '卖出'
+        self.receipt_text=f'您的{action}委托已成功提交，合同编号：{1000+self.confirmations}'
         self.response={'status':'submission_accepted','dialogs':[{'text':self.receipt_text}]}
         return self.response
     def dismiss(self):
@@ -99,11 +100,24 @@ class Batches(unittest.TestCase):
         self.orders=[{'side':'buy','code':'600001','quantity':'100'}]
         batch=dispatch({'action':'batches.prepare-default','exe':'test','account':self.account,
                         'orders':self.orders},self.store,self.factory)
-        self.assertEqual(batch['orders'][0]['default_price_preview'],'1.24')
+        self.assertIsNone(batch['estimated_buy_total'])
+        self.assertEqual(self.factory_calls,0)
         result=self.run_batch(batch)
         self.assertEqual(result['status'],'completed')
         self.assertEqual(result['orders'][0]['order']['price'],'1.25')
         self.assertEqual(self.client.clicks,1)
+    def test_fifteen_orders_with_split_sells(self):
+        self.orders=([{'side':'buy','code':str(600001+i),'price':'1.23','quantity':'100'}
+                      for i in range(10)]
+                     +[{'side':'sell','code':code,'price':'2.00','quantity':'100'}
+                       for code in ('300359','300737','002051','300359','002051')])
+        batch=self.prepare()
+        self.factory_calls=0
+        result=self.run_batch(batch)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(self.factory_calls,1)
+        self.assertEqual(self.client.clicks,15)
+        self.assertEqual(len({row['contract_no'] for row in result['orders']}),15)
     def test_missing_receipt_stops_without_reclick(self):
         batch=self.prepare()
         self.client.fail_at=1
@@ -159,6 +173,16 @@ class Batches(unittest.TestCase):
     def test_receipt_requires_matching_side_and_contract(self):
         self.assertIsNone(receipt_contract({'dialogs':[{'text':'您的卖出委托已成功提交，合同编号：123'}]},'buy'))
         self.assertEqual(receipt_contract({'dialogs':[{'text':'您的买入委托已成功提交，合同编号：123'}]},'buy'),'123')
+    def test_file_request_requires_exact_hash(self):
+        file=Path(self.tmp.name)/'request.json'
+        self.assertFalse(file.exists())
+        content=json.dumps({'action':'batches.prepare-default','orders':self.orders}).encode()
+        file.write_bytes(content)
+        digest=hashlib.sha256(content).hexdigest()
+        self.assertEqual(decode_request(['--request-file',str(file),digest])['orders'],self.orders)
+        file.write_bytes(content+b' ')
+        with self.assertRaisesRegex(RuntimeError,'REQUEST_HASH_MISMATCH'):
+            decode_request(['--request-file',str(file),digest])
     def test_default_execution_never_types_price(self):
         client=BatchClient()
         client.fields={'side':'buy','unit':'shares','code':'','price':'','quantity':''}

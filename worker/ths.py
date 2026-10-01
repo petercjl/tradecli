@@ -554,7 +554,7 @@ def receipt_contract(response, side):
 
 
 def validate_batch_orders(orders, account):
-    if not isinstance(orders, list) or not 1 <= len(orders) <= 10:
+    if not isinstance(orders, list) or not 1 <= len(orders) <= 15:
         raise RuntimeError("BATCH_SIZE_INVALID")
     if not isinstance(account, str) or not re.fullmatch(r"a_[a-f0-9]{16}", account):
         raise RuntimeError("ACCOUNT_REQUIRED")
@@ -564,15 +564,15 @@ def validate_batch_orders(orders, account):
         if not isinstance(row, dict) or set(row) != {"side", "code", "price", "quantity"}:
             raise RuntimeError("BATCH_ORDER_SCHEMA_INVALID")
         order = validate_order(dict(row, account=account))
-        if order["code"] in seen:
+        if order["side"] == "buy" and order["code"] in seen:
             raise RuntimeError("BATCH_DUPLICATE_SECURITY")
-        seen.add(order["code"])
+        if order["side"] == "buy": seen.add(order["code"])
         result.append(order)
     return result
 
 
 def validate_default_batch_orders(orders, account):
-    if not isinstance(orders, list) or not 1 <= len(orders) <= 10:
+    if not isinstance(orders, list) or not 1 <= len(orders) <= 15:
         raise RuntimeError("BATCH_SIZE_INVALID")
     if not isinstance(account, str) or not re.fullmatch(r"a_[a-f0-9]{16}", account):
         raise RuntimeError("ACCOUNT_REQUIRED")
@@ -584,9 +584,9 @@ def validate_default_batch_orders(orders, account):
             raise RuntimeError("BATCH_ORDER_INVALID")
         if not isinstance(row["quantity"],str) or not re.fullmatch(r"[1-9][0-9]{0,8}",row["quantity"]):
             raise RuntimeError("BATCH_ORDER_INVALID")
-        if row["code"] in seen:
+        if row["side"] == "buy" and row["code"] in seen:
             raise RuntimeError("BATCH_DUPLICATE_SECURITY")
-        seen.add(row["code"])
+        if row["side"] == "buy": seen.add(row["code"])
         result.append(dict(row,account=account))
     return result
 
@@ -853,7 +853,23 @@ def dispatch(request, store, factory=ReadOnlyTHS):
         except Exception as exc:
             return {**result_for(op),"ok":False,"error":safe_error(exc)}
         return execute_operation(client,store,op,True)
-    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.prepare-default", "batches.run-simulated", "funds", "positions", "snapshot", "doctor"):
+    if action == "batches.prepare-default":
+        pending=store.pending()
+        if pending:
+            return {"ok":False,"error":"OPERATION_PENDING","operation_id":pending[0]["id"]}
+        account=request.get("account")
+        orders=validate_default_batch_orders(request.get("orders"),account)
+        digest=batch_digest(account,[{"mode":"default_price"},*orders])
+        if store.find_batch_digest(digest):
+            raise RuntimeError("BATCH_DUPLICATE_PLAN")
+        batch={"id":str(uuid.uuid4()),"kind":"batch","exe":request["exe"],
+               "account":account,"mode":"default_price","digest":digest,
+               "status":"prepared","requested_at":time.time(),
+               "estimated_buy_total":None,"available_before":None,
+               "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
+        store.save(batch)
+        return batch_result(batch)
+    if action not in ("accounts", "accounts.select", "orders.open", "orders.inspect", "orders.ledger", "orders.clear", "orders.quantity-mode", "orders.prepare", "orders.submit-simulated", "orders.confirm-simulated", "orders.acknowledge", "orders.result", "batches.prepare", "batches.run-simulated", "funds", "positions", "snapshot", "doctor"):
         raise RuntimeError("COMMAND_UNSUPPORTED")
     pending=store.pending()
     if pending:
@@ -867,32 +883,28 @@ def dispatch(request, store, factory=ReadOnlyTHS):
                 "interactive_session":os.environ.get("SESSIONNAME","unknown"),
                 "simulated_orders_only":True}
     if action == "accounts": return {"ok":True,**public_accounts(client.accounts())}
-    if action in ("batches.prepare", "batches.prepare-default"):
+    if action == "batches.prepare":
         account=request.get("account")
-        use_default=action=="batches.prepare-default"
-        orders=(validate_default_batch_orders if use_default else validate_batch_orders)(request.get("orders"),account)
+        orders=validate_batch_orders(request.get("orders"),account)
         if account_id(client.accounts()["current_account"])!=account:
             raise RuntimeError("ORDER_ACCOUNT_MISMATCH")
         client.assert_simulated(account)
         client.open_page("holdings")
         funds=client.funds()["funds"]
-        previews=[client.default_price_order(o,preview=True) for o in orders] if use_default else []
-        total=sum((Decimal((previews[i] if use_default else o)["price"])*int(o["quantity"])
-                   for i,o in enumerate(orders) if o["side"]=="buy"),Decimal("0"))
+        total=sum((Decimal(o["price"])*int(o["quantity"])
+                  for o in orders if o["side"]=="buy"),Decimal("0"))
         reserve=Decimal(5)*sum(o["side"]=="buy" for o in orders)
         if total+reserve>Decimal(funds["可用金额"]):
             raise RuntimeError("BATCH_FUNDS_INSUFFICIENT")
-        digest=batch_digest(account,[{"mode":"default_price" if use_default else "limit"},*orders])
+        digest=batch_digest(account,[{"mode":"limit"},*orders])
         if store.find_batch_digest(digest):
             raise RuntimeError("BATCH_DUPLICATE_PLAN")
         batch={"id":str(uuid.uuid4()),"kind":"batch","exe":request["exe"],"account":account,
-               "mode":"default_price" if use_default else "limit",
+               "mode":"limit",
                "digest":digest,"status":"prepared","requested_at":time.time(),
-               "estimated_buy_total":str(total),"available_before":funds["可用金额"],
-               "orders":[{"index":i,"order":o,"status":"queued",
-                          **({"default_price_preview":previews[i]["price"],
-                              "price_source":previews[i]["price_source"]} if use_default else {})}
-                         for i,o in enumerate(orders)]}
+               "estimated_buy_total":str(total),
+               "available_before":funds["可用金额"],
+               "orders":[{"index":i,"order":o,"status":"queued"} for i,o in enumerate(orders)]}
         store.save(batch)
         return batch_result(batch)
     if action == "batches.run-simulated":
@@ -1057,7 +1069,7 @@ def main():
         win32api.CloseHandle(mutex)
         return {"ok":False,"error":"SESSION_BUSY"}
     try:
-        request=json.loads(base64.b64decode(sys.argv[1]).decode("utf-8"))
+        request=decode_request(sys.argv[1:])
         if request.get("protocol")!=1: raise RuntimeError("PROTOCOL_UNSUPPORTED")
         store=Store(Path(os.environ["LOCALAPPDATA"])/"tradecli"/"operations.sqlite3")
         try: return dispatch(request,store)
@@ -1067,6 +1079,17 @@ def main():
     finally:
         win32event.ReleaseMutex(mutex)
         win32api.CloseHandle(mutex)
+
+
+def decode_request(args):
+    if len(args)==3 and args[0]=="--request-file":
+        content=Path(args[1]).read_bytes()
+        if hashlib.sha256(content).hexdigest()!=args[2]:
+            raise RuntimeError("REQUEST_HASH_MISMATCH")
+        return json.loads(content.decode("utf-8"))
+    if len(args)==1:
+        return json.loads(base64.b64decode(args[0]).decode("utf-8"))
+    raise RuntimeError("REQUEST_ARGUMENTS_INVALID")
 
 
 if __name__ == "__main__":

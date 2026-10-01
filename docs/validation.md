@@ -114,3 +114,16 @@ The final CLI requires a user-confirmed plan plus `--yes` at execution. Unit
 tests verify that default-price execution types only the code and quantity,
 and that a missing confirmation flag prevents dispatch. This is a small
 simulated-client sample, not a guarantee that prices or fills remain unchanged.
+
+## Fifteen-order simulated batch (2026-10-01)
+
+Unreleased 0.2.0-dev.4 increased the batch limit to 15 and permits separate
+sell rows for the same held stock. A 15-row plan exceeded the Parallels command
+payload path; requests now travel through a private, SHA-256-verified file.
+The default-price planning command validates the list without entering each
+order form. A confirmed simulated batch of ten buys and five sells completed
+in one worker in 71.499 seconds. Fifteen distinct receipts matched the refreshed
+current-day ledger for side, code, 100-share quantity and limit price. All
+fifteen showed zero filled at inspection. The five sell orders covered three
+held securities, with two securities split into two orders each. No funded
+account was used for submission.

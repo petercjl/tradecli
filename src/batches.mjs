@@ -6,15 +6,15 @@ export function validateBatchFile(file, mode='limit') {
  try { data=JSON.parse(fs.readFileSync(file,'utf8')); }
  catch { throw new Fault('BATCH_FILE_INVALID'); }
  if(!data || Array.isArray(data) || Object.keys(data).length!==1 || !Array.isArray(data.orders)
-    || data.orders.length<1 || data.orders.length>10)throw new Fault('BATCH_FILE_INVALID');
+    || data.orders.length<1 || data.orders.length>15)throw new Fault('BATCH_FILE_INVALID');
  const seen=new Set();
  const orders=data.orders.map(row=>{
   if(!row || Array.isArray(row) || Object.keys(row).sort().join(',')!==(mode==='default'?'code,quantity,side':'code,price,quantity,side'))throw new Fault('BATCH_ORDER_INVALID');
   if(!['buy','sell'].includes(row.side) || typeof row.code!=='string' || !/^\d{6}$/.test(row.code)
      || mode==='limit' && (typeof row.price!=='string' || !/^\d{1,6}(\.\d{1,3})?$/.test(row.price) || Number(row.price)<=0)
      || typeof row.quantity!=='string' || !/^[1-9]\d{0,8}$/.test(row.quantity))throw new Fault('BATCH_ORDER_INVALID');
-  if(seen.has(row.code))throw new Fault('BATCH_DUPLICATE_SECURITY');
-  seen.add(row.code);
+  if(row.side==='buy' && seen.has(row.code))throw new Fault('BATCH_DUPLICATE_SECURITY');
+  if(row.side==='buy')seen.add(row.code);
   return mode==='default' ? {side:row.side,code:row.code,quantity:row.quantity}
                           : {side:row.side,code:row.code,price:row.price,quantity:row.quantity};
  });

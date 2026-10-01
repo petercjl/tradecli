@@ -45,7 +45,7 @@
     "Account selection; explicit selections remain active, queries restore the original account",
     "Buy/sell form edits",
     "Explicit simulated-account order submission",
-    "Explicit simulated-account batch submission (one Windows worker, up to ten distinct securities)",
+    "Explicit simulated-account batch submission (one Windows worker, up to fifteen orders)",
     "Legacy copy recovery only",
     "Explicit runtime and Skill installation"
   ],

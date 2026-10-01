@@ -22,10 +22,14 @@ test('batch input is exact, ordered and rejects ambiguous orders',()=>{
    {orders:[good.orders[0],good.orders[0]]},
    {orders:[{...good.orders[0],quantity:100}]},
    {orders:[{...good.orders[0],price:'NaN'}]},
-   {orders:Array.from({length:11},(_,i)=>({...good.orders[0],code:String(600000+i)}))}
+   {orders:Array.from({length:16},(_,i)=>({...good.orders[0],code:String(600000+i)}))}
   ]) {
    fs.writeFileSync(file,JSON.stringify(bad));
    assert.throws(()=>validateBatchFile(file));
   }
+  const repeatedSells={orders:[{side:'sell',code:'300359',quantity:'100'},
+                               {side:'sell',code:'300359',quantity:'100'}]};
+  fs.writeFileSync(file,JSON.stringify(repeatedSells));
+  assert.equal(validateBatchFile(file,'default').orders.length,2);
  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });
