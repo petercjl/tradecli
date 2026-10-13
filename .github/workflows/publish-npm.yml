@@ -24,7 +24,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  qa:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: npm ci
+      - run: npm run check
+      - if: runner.os != 'Windows'
+        run: npm test
+      - if: runner.os == 'Windows'
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - run: npm pack --dry-run
   publish:
+    needs: qa
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

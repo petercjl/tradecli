@@ -21,6 +21,7 @@ export function saveCaptures(result) {
  return {...result,status:result.ok&&reviewRequired?'review_required':result.status,capture_ids:captures,review_required:reviewRequired};
 }
 function money(value) {
+ if(typeof value==='string'&&/^-0+(\.0{1,4})?$/.test(value))return 0n;
  if(typeof value!=='string'||!/^\d+(\.\d{1,4})?$/.test(value))throw new Fault('REVIEW_AMOUNT_INVALID');
  const [a,b='']=value.split('.');return BigInt(a)*10000n+BigInt(b.padEnd(4,'0'));
 }
@@ -39,11 +40,19 @@ export function validateReview(manifest,review) {
  }
  const warnings=[];
  if(total!==money(manifest.funds['股票市值']))warnings.push('DISPLAYED_STOCK_VALUE_MISMATCH');
- if(total+money(manifest.funds['资金余额'])!==money(manifest.funds['总资产']))warnings.push('ASSET_RECONCILIATION_MISMATCH');
+ // Purchasing power is the displayed available amount, independent of balance.
+ money(manifest.funds['可用金额']);
+ const reconciliation={cash_field:'可用金额',buy_budget:manifest.funds['可用金额'],notes:[]};
+ try {
+  if(total+money(manifest.funds['资金余额'])!==money(manifest.funds['总资产']))
+   reconciliation.notes.push('ASSET_RECONCILIATION_MISMATCH');
+ } catch {
+  reconciliation.notes.push('ASSET_RECONCILIATION_UNAVAILABLE');
+ }
  return {ok:warnings.length===0,status:warnings.length?'review_inconsistent':'reviewed',error:warnings.length?'RECONCILIATION_FAILED':null,
   account_id:manifest.account_id,current_account:manifest.current_account,capture_id:manifest.capture_id,
   captured_at:manifest.captured_at,source:'codex_visual_review',freshness:manifest.freshness,
-  funds:manifest.funds,positions:review.rows,row_count:review.rows.length,warnings,
+  funds:manifest.funds,reconciliation,positions:review.rows,row_count:review.rows.length,warnings,
   clipboard_unchanged:manifest.clipboard_unchanged,complete:true};
 }
 export function reviewCapture(id,file) {

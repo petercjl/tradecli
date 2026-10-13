@@ -37,6 +37,23 @@ class ReadOnlyTHS:
                                           if c.class_name() == "Static"]
             if any("验证码" in text for text in labels):
                 raise RuntimeError("USER_VERIFICATION_REQUIRED")
+            # The embedded browser exposes a zero-area top-level helper with
+            # an invisible server child. It cannot obscure the trading window.
+            # Keep unknown classes, visible content and real dialogs fail-closed.
+            if not w.window_text().strip() and children:
+                try:
+                    rect = w.rectangle()
+                    browser_helper = (
+                        w.class_name() == "Internet Explorer_Hidden"
+                        and rect.right == rect.left and rect.bottom == rect.top
+                        and all(c.class_name() == "Internet Explorer_Server"
+                                and not c.is_visible() and not c.window_text().strip()
+                                for c in children)
+                    )
+                except Exception:
+                    browser_helper = False
+                if browser_helper:
+                    continue
             if w.window_text().strip() or children:
                 blocked = True
         if blocked:
@@ -88,6 +105,12 @@ class ReadOnlyTHS:
         if len(matches) != 1:
             raise RuntimeError("ACCOUNT_NOT_FOUND_OR_AMBIGUOUS")
         if before["current_account"] != account:
+            # Read the old account's funds only after bringing its holdings
+            # page into view. open_page preserves any visible order draft and
+            # applies the same dialog guards as ordinary query navigation.
+            self.open_page("holdings")
+            if self.accounts() != before:
+                raise RuntimeError("ACCOUNT_CHANGED_DURING_READ")
             before_funds = self.funds()["funds"]
             import ctypes
             from ctypes import wintypes
@@ -571,6 +594,23 @@ import sqlite3
 import uuid
 
 
+def capture_pixel_size(width, height, dpi):
+    """THS WM_PRINT renders its 96-DPI layout at the window's current DPI.
+
+    Allocate the native render surface, not just the logical window rectangle.
+    Keep native pixels for visual review; never enlarge an already clipped PNG.
+    """
+    if not (500 <= width <= 8000 and 300 <= height <= 8000):
+        raise RuntimeError("WINDOW_NOT_CAPTURE_READY")
+    if not isinstance(dpi, int) or not 96 <= dpi <= 768:
+        raise RuntimeError("CAPTURE_DPI_UNAVAILABLE")
+    pixel_width = (width * dpi + 95) // 96
+    pixel_height = (height * dpi + 95) // 96
+    if pixel_width > 8000 or pixel_height > 8000 or pixel_width * pixel_height > 32000000:
+        raise RuntimeError("CAPTURE_SIZE_UNSUPPORTED")
+    return pixel_width, pixel_height
+
+
 def capture_window_png(handle):
     """Render the window; never send copy, export or keyboard commands."""
     import ctypes
@@ -581,9 +621,11 @@ def capture_window_png(handle):
     if win32gui.IsIconic(handle):
         raise RuntimeError("WINDOW_MINIMIZED")
     left, top, right, bottom = win32gui.GetWindowRect(handle)
-    width, height = right-left, bottom-top
-    if not (500 <= width <= 8000 and 300 <= height <= 8000):
-        raise RuntimeError("WINDOW_NOT_CAPTURE_READY")
+    from ctypes import wintypes
+    get_dpi = ctypes.windll.user32.GetDpiForWindow
+    get_dpi.argtypes = [wintypes.HWND]
+    get_dpi.restype = wintypes.UINT
+    width, height = capture_pixel_size(right-left, bottom-top, get_dpi(handle))
     dc_handle = win32gui.GetWindowDC(handle)
     source = win32ui.CreateDCFromHandle(dc_handle)
     target = source.CreateCompatibleDC()

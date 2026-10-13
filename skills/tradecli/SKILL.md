@@ -149,6 +149,10 @@ Return to step 5; use the interpretation knowledge route for disagreement.
 preserve user-owned drafts and do not dismiss unknown dialogs. CAPTCHA is completed
 by the user. `ORDER_ALREADY_ATTEMPTED` returns to result/ledger inspection only.
 
+## Buying-budget basis
+
+Use the bound account's fresh `可用金额` (available funds) as the sole buying-budget field. Preserve `资金余额`, `可取金额` and `总资产` as separate displayed facts. Asset reconciliation notes are informational and do not replace or cap available funds. Missing, invalid or negative available funds block budgeting; zero provides no buying budget. Account attribution, complete holdings and stock-value checks remain required.
+
 ## Strategy-to-batch branch → step 6
 
 Use this branch when the user supplies a buy/sell list, target holdings, or a
